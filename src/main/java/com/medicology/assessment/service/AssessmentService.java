@@ -6,6 +6,7 @@ import com.medicology.assessment.dto.response.AssessmentSummaryResponse;
 import com.medicology.assessment.dto.response.QuestionOptionResponse;
 import com.medicology.assessment.dto.response.QuestionResponse;
 import com.medicology.assessment.entity.Assessment;
+import com.medicology.assessment.entity.AssessmentStatus;
 import com.medicology.assessment.entity.Question;
 import com.medicology.assessment.entity.QuestionOption;
 import com.medicology.assessment.exception.NotFoundException;
@@ -35,6 +36,27 @@ public class AssessmentService {
     @Transactional(readOnly = true)
     public AssessmentDetailResponse getAssessment(UUID assessmentId) {
         return toDetailResponse(findAssessment(assessmentId));
+    }
+
+    @Transactional(readOnly = true)
+    public AssessmentDetailResponse findActiveAssessment(UUID sectionId, UUID lessonId) {
+        if (lessonId != null) {
+            var lessonAssessment = assessmentRepository
+                    .findFirstBySectionIdAndLessonIdAndStatusAndActiveTrueOrderByUpdatedAtDesc(
+                            sectionId,
+                            lessonId,
+                            AssessmentStatus.PUBLISHED);
+            if (lessonAssessment.isPresent()) {
+                return toDetailResponse(lessonAssessment.get());
+            }
+        }
+
+        return assessmentRepository
+                .findFirstBySectionIdAndLessonIdIsNullAndStatusAndActiveTrueOrderByUpdatedAtDesc(
+                        sectionId,
+                        AssessmentStatus.PUBLISHED)
+                .map(this::toDetailResponse)
+                .orElse(null);
     }
 
     public AssessmentDetailResponse createAssessment(AssessmentRequest request) {
