@@ -1,7 +1,7 @@
 package com.medicology.assessment.controller;
 
 import com.medicology.assessment.dto.common.ApiResponse;
-import com.medicology.assessment.dto.response.AssessmentDetailResponse;
+import com.medicology.assessment.dto.response.StudentAssessmentDetailResponse;
 import com.medicology.assessment.service.AssessmentService;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -20,7 +20,7 @@ public class AssessmentDiscoveryController {
     private final AssessmentService assessmentService;
 
     @GetMapping("/{sectionId}/assessment")
-    public ResponseEntity<ApiResponse<AssessmentDetailResponse>> getActiveAssessment(
+    public ResponseEntity<ApiResponse<StudentAssessmentDetailResponse>> getActiveAssessment(
             @PathVariable UUID sectionId,
             @RequestParam(required = false) UUID lessonId) {
         return ResponseEntity.ok(ApiResponse.success(

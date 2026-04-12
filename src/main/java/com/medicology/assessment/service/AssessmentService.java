@@ -5,6 +5,9 @@ import com.medicology.assessment.dto.response.AssessmentDetailResponse;
 import com.medicology.assessment.dto.response.AssessmentSummaryResponse;
 import com.medicology.assessment.dto.response.QuestionOptionResponse;
 import com.medicology.assessment.dto.response.QuestionResponse;
+import com.medicology.assessment.dto.response.StudentAssessmentDetailResponse;
+import com.medicology.assessment.dto.response.StudentQuestionOptionResponse;
+import com.medicology.assessment.dto.response.StudentQuestionResponse;
 import com.medicology.assessment.entity.Assessment;
 import com.medicology.assessment.entity.AssessmentStatus;
 import com.medicology.assessment.entity.Question;
@@ -39,7 +42,7 @@ public class AssessmentService {
     }
 
     @Transactional(readOnly = true)
-    public AssessmentDetailResponse findActiveAssessment(UUID sectionId, UUID lessonId) {
+    public StudentAssessmentDetailResponse findActiveAssessment(UUID sectionId, UUID lessonId) {
         if (lessonId != null) {
             var lessonAssessment = assessmentRepository
                     .findFirstBySectionIdAndLessonIdAndStatusAndActiveTrueOrderByUpdatedAtDesc(
@@ -47,7 +50,7 @@ public class AssessmentService {
                             lessonId,
                             AssessmentStatus.PUBLISHED);
             if (lessonAssessment.isPresent()) {
-                return toDetailResponse(lessonAssessment.get());
+                return toStudentDetailResponse(lessonAssessment.get());
             }
         }
 
@@ -55,7 +58,7 @@ public class AssessmentService {
                 .findFirstBySectionIdAndLessonIdIsNullAndStatusAndActiveTrueOrderByUpdatedAtDesc(
                         sectionId,
                         AssessmentStatus.PUBLISHED)
-                .map(this::toDetailResponse)
+                .map(this::toStudentDetailResponse)
                 .orElse(null);
     }
 
@@ -141,6 +144,41 @@ public class AssessmentService {
                 option.getId(),
                 option.getContent(),
                 option.getCorrect(),
+                option.getDisplayOrder());
+    }
+
+    private StudentAssessmentDetailResponse toStudentDetailResponse(Assessment assessment) {
+        return new StudentAssessmentDetailResponse(
+                assessment.getId(),
+                assessment.getTitle(),
+                assessment.getDescription(),
+                assessment.getCourseId(),
+                assessment.getSectionId(),
+                assessment.getLessonId(),
+                assessment.getPassScore(),
+                assessment.getTimeLimitMinutes(),
+                assessment.getStatus(),
+                assessment.getActive(),
+                assessment.getCreatedAt(),
+                assessment.getUpdatedAt(),
+                assessment.getQuestions().stream().map(this::toStudentQuestionResponse).toList());
+    }
+
+    private StudentQuestionResponse toStudentQuestionResponse(Question question) {
+        return new StudentQuestionResponse(
+                question.getId(),
+                question.getContent(),
+                question.getType(),
+                question.getDisplayOrder(),
+                question.getPoints(),
+                question.getActive(),
+                question.getOptions().stream().map(this::toStudentQuestionOptionResponse).toList());
+    }
+
+    private StudentQuestionOptionResponse toStudentQuestionOptionResponse(QuestionOption option) {
+        return new StudentQuestionOptionResponse(
+                option.getId(),
+                option.getContent(),
                 option.getDisplayOrder());
     }
 }
