@@ -7,7 +7,6 @@ import java.util.UUID;
 public record AttemptQuestionResponse(
         UUID id,
         String content,
-        String explanation,
         QuestionType type,
         Integer displayOrder,
         Integer points,
