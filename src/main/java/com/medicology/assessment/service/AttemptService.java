@@ -238,7 +238,6 @@ public class AttemptService {
         return new AttemptQuestionResponse(
                 question.getId(),
                 question.getContent(),
-                question.getExplanation(),
                 question.getType(),
                 question.getDisplayOrder(),
                 question.getPoints(),
