@@ -15,6 +15,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import org.springframework.beans.factory.annotation.Value;
 
 @Configuration
 @EnableWebSecurity
@@ -23,6 +24,9 @@ import java.util.Arrays;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Value("${app.cors.allowed-origins:http://localhost:3000,http://localhost:8083}")
+    private String corsAllowedOrigins;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -50,10 +54,10 @@ public class SecurityConfig {
                 CorsConfiguration configuration = new CorsConfiguration();
                 
                 // 1. Cho phép các nguồn gửi yêu cầu
-                configuration.setAllowedOrigins(Arrays.asList(
-                "http://localhost:3000",
-                        "http://localhost:8080"
-                ));
+                configuration.setAllowedOrigins(Arrays.stream(corsAllowedOrigins.split(","))
+                                .map(String::trim)
+                                .filter(s -> !s.isEmpty())
+                                .toList());
                 
                 // 2. Cho phép các phương thức HTTPS
                 configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS","PATCH"));
