@@ -20,11 +20,17 @@ public class JWTDecoder {
     @Value("${jwt.secret}")
     private String secretKey;
 
+    @Value("${jwt.issuer:medicology-auth}")
+    private String expectedIssuer;
+
+    @Value("${jwt.audience:medicology-api}")
+    private String expectedAudience;
+
     private SecretKey key;
 
     @PostConstruct
     public void init() {
-        this.key = Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8));
+        this.key = Keys.hmacShaKeyFor(secretKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     public String extractSubject(String token) {
@@ -64,9 +70,36 @@ public class JWTDecoder {
     }
 
     public boolean isTokenValid(String token) {
+        return isTokenValid(token, "access");
+    }
+
+    public boolean isTokenValid(String token, String expectedType) {
         try {
-            extractAllClaims(token);
-            return true;
+            Claims claims = Jwts.parser()
+                    .verifyWith(key)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+
+            String tokenType = claims.get("type", String.class);
+            if (!expectedType.equals(tokenType)) {
+                return false;
+            }
+            String iss = claims.getIssuer();
+            if (iss == null || !expectedIssuer.equals(iss)) {
+                return false;
+            }
+            Object aud = claims.get("aud");
+            if (aud == null) {
+                return false;
+            }
+            if (aud instanceof String s) {
+                return expectedAudience.equals(s);
+            }
+            if (aud instanceof List<?> list) {
+                return list.stream().anyMatch(expectedAudience::equals);
+            }
+            return false;
         } catch (JwtException | IllegalArgumentException exception) {
             return false;
         }

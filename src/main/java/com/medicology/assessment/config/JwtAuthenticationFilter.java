@@ -44,7 +44,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String jwt = authHeader.substring(7);
 
         try {
-            if (SecurityContextHolder.getContext().getAuthentication() == null && jwtDecoder.isTokenValid(jwt)) {
+            if (SecurityContextHolder.getContext().getAuthentication() == null && jwtDecoder.isTokenValid(jwt, "access")) {
                 UUID userId = jwtDecoder.extractUserId(jwt);
                 String subject = jwtDecoder.extractSubject(jwt);
                 boolean admin = jwtDecoder.extractIsAdmin(jwt);
