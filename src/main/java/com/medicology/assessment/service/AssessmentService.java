@@ -27,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AssessmentService {
 
     private final AssessmentRepository assessmentRepository;
+    private final LearningEnrollmentClient learningEnrollmentClient;
 
     @Transactional(readOnly = true)
     public List<AssessmentSummaryResponse> listAssessments() {
@@ -42,7 +43,8 @@ public class AssessmentService {
     }
 
     @Transactional(readOnly = true)
-    public StudentAssessmentDetailResponse findActiveAssessment(UUID sectionId, UUID lessonId) {
+    public StudentAssessmentDetailResponse findActiveAssessment(UUID sectionId, UUID lessonId, UUID userId) {
+        Assessment assessment = null;
         if (lessonId != null) {
             var lessonAssessment = assessmentRepository
                     .findFirstBySectionIdAndLessonIdAndStatusAndActiveTrueOrderByUpdatedAtDesc(
@@ -50,16 +52,23 @@ public class AssessmentService {
                             lessonId,
                             AssessmentStatus.PUBLISHED);
             if (lessonAssessment.isPresent()) {
-                return toStudentDetailResponse(lessonAssessment.get());
+                assessment = lessonAssessment.get();
             }
         }
-
-        return assessmentRepository
-                .findFirstBySectionIdAndLessonIdIsNullAndStatusAndActiveTrueOrderByUpdatedAtDesc(
-                        sectionId,
-                        AssessmentStatus.PUBLISHED)
-                .map(this::toStudentDetailResponse)
-                .orElse(null);
+        if (assessment == null) {
+            assessment = assessmentRepository
+                    .findFirstBySectionIdAndLessonIdIsNullAndStatusAndActiveTrueOrderByUpdatedAtDesc(
+                            sectionId,
+                            AssessmentStatus.PUBLISHED)
+                    .orElse(null);
+        }
+        if (assessment == null) {
+            return null;
+        }
+        if (userId != null) {
+            learningEnrollmentClient.assertCanAccessAssessment(userId, assessment.getSectionId(), assessment.getLessonId());
+        }
+        return toStudentDetailResponse(assessment);
     }
 
     public AssessmentDetailResponse createAssessment(AssessmentRequest request) {

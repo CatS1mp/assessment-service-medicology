@@ -26,6 +26,7 @@ import com.medicology.assessment.repository.QuestionOptionRepository;
 import com.medicology.assessment.repository.QuestionRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,7 @@ public class AttemptService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository questionOptionRepository;
     private final LearningProgressGateway learningProgressGateway;
+    private final LearningEnrollmentClient learningEnrollmentClient;
 
     public AttemptStartResponse startAttempt(UUID assessmentId, UUID userId) {
         Assessment assessment = assessmentRepository.findById(assessmentId)
@@ -57,6 +59,8 @@ public class AttemptService {
         if (assessment.getStatus() != AssessmentStatus.PUBLISHED || !Boolean.TRUE.equals(assessment.getActive())) {
             throw new ConflictException(1409, "Assessment is not available for submission.");
         }
+
+        learningEnrollmentClient.assertCanAccessAssessment(userId, assessment.getSectionId(), assessment.getLessonId());
 
         Attempt existingAttempt = attemptRepository
                 .findTopByAssessment_IdAndUserIdAndStatusOrderByStartedAtDesc(assessmentId, userId, AttemptStatus.IN_PROGRESS)
@@ -79,6 +83,7 @@ public class AttemptService {
     public AttemptAnswerResponse saveAnswer(UUID attemptId, UUID userId, AttemptAnswerRequest request) {
         Attempt attempt = findOwnedAttempt(attemptId, userId);
         ensureInProgress(attempt);
+        ensureWithinTimeLimit(attempt);
 
         Question question = questionRepository.findByIdAndAssessment_Id(request.questionId(), attempt.getAssessment().getId())
                 .orElseThrow(() -> new NotFoundException(1404, "Question not found for attempt."));
@@ -112,6 +117,7 @@ public class AttemptService {
         }
 
         ensureInProgress(attempt);
+        ensureWithinTimeLimit(attempt);
 
         List<Question> activeQuestions = attempt.getAssessment().getQuestions().stream()
                 .filter(question -> Boolean.TRUE.equals(question.getActive()))
@@ -217,6 +223,17 @@ public class AttemptService {
     private void ensureInProgress(Attempt attempt) {
         if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
             throw new ConflictException(1409, "Attempt is already submitted.");
+        }
+    }
+
+    private void ensureWithinTimeLimit(Attempt attempt) {
+        Integer limit = attempt.getAssessment().getTimeLimitMinutes();
+        if (limit == null || limit <= 0) {
+            return;
+        }
+        Instant deadline = attempt.getStartedAt().plus(limit, ChronoUnit.MINUTES);
+        if (Instant.now().isAfter(deadline)) {
+            throw new ConflictException(1409, "Time limit for this attempt has expired.");
         }
     }
 
