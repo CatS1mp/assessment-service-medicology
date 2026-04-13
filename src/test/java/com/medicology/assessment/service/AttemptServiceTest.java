@@ -57,6 +57,9 @@ class AttemptServiceTest {
     @Mock
     private LearningProgressGateway learningProgressGateway;
 
+    @Mock
+    private LearningEnrollmentClient learningEnrollmentClient;
+
     @InjectMocks
     private AttemptService attemptService;
 
