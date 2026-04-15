@@ -7,7 +7,6 @@ import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
-import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import javax.crypto.SecretKey;
@@ -16,7 +15,6 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class JWTDecoder {
-
     @Value("${jwt.secret}")
     private String secretKey;
 
@@ -96,8 +94,8 @@ public class JWTDecoder {
             if (aud instanceof String s) {
                 return expectedAudience.equals(s);
             }
-            if (aud instanceof List<?> list) {
-                return list.stream().anyMatch(expectedAudience::equals);
+            if (aud instanceof Collection<?> collection) {
+                return collection.stream().anyMatch(expectedAudience::equals);
             }
             return false;
         } catch (JwtException | IllegalArgumentException exception) {
@@ -112,4 +110,5 @@ public class JWTDecoder {
                 .parseSignedClaims(token)
                 .getPayload();
     }
+
 }

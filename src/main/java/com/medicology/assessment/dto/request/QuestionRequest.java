@@ -1,12 +1,9 @@
 package com.medicology.assessment.dto.request;
 
 import com.medicology.assessment.entity.QuestionType;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
-import java.util.List;
 
 public record QuestionRequest(
         @NotBlank(message = "question content is required")
@@ -21,7 +18,9 @@ public record QuestionRequest(
         @Min(value = 1, message = "points must be at least 1")
         Integer points,
         Boolean active,
-        @NotEmpty(message = "question must have at least one option")
-        List<@Valid QuestionOptionRequest> options
+        @NotBlank(message = "payload is required")
+        String payload,
+        @NotBlank(message = "answerKey is required")
+        String answerKey
 ) {
 }

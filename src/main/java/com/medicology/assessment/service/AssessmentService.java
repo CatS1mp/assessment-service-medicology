@@ -3,15 +3,12 @@ package com.medicology.assessment.service;
 import com.medicology.assessment.dto.request.AssessmentRequest;
 import com.medicology.assessment.dto.response.AssessmentDetailResponse;
 import com.medicology.assessment.dto.response.AssessmentSummaryResponse;
-import com.medicology.assessment.dto.response.QuestionOptionResponse;
 import com.medicology.assessment.dto.response.QuestionResponse;
 import com.medicology.assessment.dto.response.StudentAssessmentDetailResponse;
-import com.medicology.assessment.dto.response.StudentQuestionOptionResponse;
 import com.medicology.assessment.dto.response.StudentQuestionResponse;
 import com.medicology.assessment.entity.Assessment;
 import com.medicology.assessment.entity.AssessmentStatus;
 import com.medicology.assessment.entity.Question;
-import com.medicology.assessment.entity.QuestionOption;
 import com.medicology.assessment.exception.NotFoundException;
 import com.medicology.assessment.repository.AssessmentRepository;
 import java.util.List;
@@ -145,15 +142,9 @@ public class AssessmentService {
                 question.getDisplayOrder(),
                 question.getPoints(),
                 question.getActive(),
-                question.getOptions().stream().map(this::toQuestionOptionResponse).toList());
-    }
-
-    private QuestionOptionResponse toQuestionOptionResponse(QuestionOption option) {
-        return new QuestionOptionResponse(
-                option.getId(),
-                option.getContent(),
-                option.getCorrect(),
-                option.getDisplayOrder());
+                question.getPayload(),
+                question.getAnswerKey(),
+                question.getVersion());
     }
 
     private StudentAssessmentDetailResponse toStudentDetailResponse(Assessment assessment) {
@@ -181,13 +172,7 @@ public class AssessmentService {
                 question.getDisplayOrder(),
                 question.getPoints(),
                 question.getActive(),
-                question.getOptions().stream().map(this::toStudentQuestionOptionResponse).toList());
-    }
-
-    private StudentQuestionOptionResponse toStudentQuestionOptionResponse(QuestionOption option) {
-        return new StudentQuestionOptionResponse(
-                option.getId(),
-                option.getContent(),
-                option.getDisplayOrder());
+                question.getPayload(),
+                question.getVersion());
     }
 }

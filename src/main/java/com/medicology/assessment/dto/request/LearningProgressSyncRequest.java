@@ -12,6 +12,7 @@ public record LearningProgressSyncRequest(
         UUID attemptId,
         BigDecimal score,
         Boolean passed,
+        String resultStatus,
         Instant completedAt
 ) {
 }

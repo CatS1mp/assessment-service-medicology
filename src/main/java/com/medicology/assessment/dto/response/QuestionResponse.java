@@ -1,7 +1,6 @@
 package com.medicology.assessment.dto.response;
 
 import com.medicology.assessment.entity.QuestionType;
-import java.util.List;
 import java.util.UUID;
 
 public record QuestionResponse(
@@ -12,6 +11,8 @@ public record QuestionResponse(
         Integer displayOrder,
         Integer points,
         Boolean active,
-        List<QuestionOptionResponse> options
+        String payload,
+        String answerKey,
+        Integer version
 ) {
 }
