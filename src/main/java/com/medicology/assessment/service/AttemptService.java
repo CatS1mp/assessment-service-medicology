@@ -3,8 +3,9 @@ package com.medicology.assessment.service;
 import com.medicology.assessment.dto.request.AttemptAnswerRequest;
 import com.medicology.assessment.dto.request.LearningProgressSyncRequest;
 import com.medicology.assessment.dto.response.AttemptAnswerResponse;
-import com.medicology.assessment.dto.response.AttemptQuestionOptionResponse;
 import com.medicology.assessment.dto.response.AttemptQuestionResponse;
+import com.medicology.assessment.dto.response.AttemptReviewAnswerResponse;
+import com.medicology.assessment.dto.response.AttemptReviewResponse;
 import com.medicology.assessment.dto.response.AttemptResultResponse;
 import com.medicology.assessment.dto.response.AttemptStartResponse;
 import com.medicology.assessment.dto.response.AttemptSummaryResponse;
@@ -14,16 +15,18 @@ import com.medicology.assessment.entity.AssessmentStatus;
 import com.medicology.assessment.entity.Attempt;
 import com.medicology.assessment.entity.AttemptAnswer;
 import com.medicology.assessment.entity.AttemptStatus;
+import com.medicology.assessment.entity.GradingStatus;
 import com.medicology.assessment.entity.Question;
-import com.medicology.assessment.entity.QuestionOption;
+import com.medicology.assessment.entity.ResultStatus;
 import com.medicology.assessment.exception.ConflictException;
 import com.medicology.assessment.exception.NotFoundException;
 import com.medicology.assessment.repository.AssessmentRepository;
 import com.medicology.assessment.repository.AssessmentResultRepository;
 import com.medicology.assessment.repository.AttemptAnswerRepository;
 import com.medicology.assessment.repository.AttemptRepository;
-import com.medicology.assessment.repository.QuestionOptionRepository;
 import com.medicology.assessment.repository.QuestionRepository;
+import com.medicology.assessment.service.grading.GradingEngine;
+import com.medicology.assessment.service.grading.model.GradingDecision;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -48,7 +51,7 @@ public class AttemptService {
     private final AttemptAnswerRepository attemptAnswerRepository;
     private final AssessmentResultRepository assessmentResultRepository;
     private final QuestionRepository questionRepository;
-    private final QuestionOptionRepository questionOptionRepository;
+    private final GradingEngine gradingEngine;
     private final LearningProgressGateway learningProgressGateway;
     private final LearningEnrollmentClient learningEnrollmentClient;
 
@@ -87,8 +90,6 @@ public class AttemptService {
 
         Question question = questionRepository.findByIdAndAssessment_Id(request.questionId(), attempt.getAssessment().getId())
                 .orElseThrow(() -> new NotFoundException(1404, "Question not found for attempt."));
-        QuestionOption selectedOption = questionOptionRepository.findByIdAndQuestion_Id(request.selectedOptionId(), question.getId())
-                .orElseThrow(() -> new NotFoundException(1404, "Selected option not found for question."));
 
         AttemptAnswer answer = attemptAnswerRepository.findByAttempt_IdAndQuestion_Id(attemptId, question.getId())
                 .orElseGet(() -> {
@@ -99,20 +100,37 @@ public class AttemptService {
                     return created;
                 });
 
-        answer.setSelectedOption(selectedOption);
+        answer.setUserAnswer(request.userAnswer());
+        answer.setQuestionVersion(question.getVersion());
+        answer.setPayloadSnapshot(question.getPayload());
+        answer.setAnswerKeySnapshot(question.getAnswerKey());
+        answer.setOptionContentSnapshot(question.getPayload());
+        answer.setGradingStatus(GradingStatus.PENDING);
+        answer.setGradingSource(null);
+        answer.setConfidence(null);
+        answer.setExplanation(null);
+        answer.setAiModel(null);
+        answer.setEvaluatedAt(null);
+        answer.setEvaluatedBy(null);
+        answer.setCorrect(Boolean.FALSE);
+        answer.setAwardedPoints(BigDecimal.ZERO);
         AttemptAnswer persisted = attemptAnswerRepository.save(answer);
 
         return new AttemptAnswerResponse(
                 persisted.getAttempt().getId(),
                 persisted.getQuestion().getId(),
-                persisted.getSelectedOption().getId(),
+                persisted.getUserAnswer(),
+                persisted.getGradingStatus(),
                 persisted.getAnsweredAt());
     }
 
     public AttemptResultResponse submitAttempt(UUID attemptId, UUID userId) {
         Attempt attempt = findOwnedAttempt(attemptId, userId);
 
-        if (attempt.getStatus() == AttemptStatus.SUBMITTED && attempt.getResult() != null) {
+        if ((attempt.getStatus() == AttemptStatus.SUBMITTED
+                || attempt.getStatus() == AttemptStatus.FINALIZED
+                || attempt.getStatus() == AttemptStatus.PENDING_REVIEW)
+                && attempt.getResult() != null) {
             return toResultResponse(attempt.getResult());
         }
 
@@ -132,6 +150,7 @@ public class AttemptService {
 
         BigDecimal score = BigDecimal.ZERO;
         int correctAnswers = 0;
+        int pendingManualReviews = 0;
 
         for (Question question : activeQuestions) {
             AttemptAnswer answer = answerByQuestionId.get(question.getId());
@@ -139,14 +158,32 @@ public class AttemptService {
                 continue;
             }
 
-            boolean correct = Boolean.TRUE.equals(answer.getSelectedOption().getCorrect());
-            answer.setCorrect(correct);
-            answer.setAwardedPoints(correct ? BigDecimal.valueOf(question.getPoints()) : BigDecimal.ZERO);
+            GradingDecision decision = gradingEngine.grade(question, answer.getUserAnswer());
+            answer.setCorrect(decision.correct());
+            answer.setAwardedPoints(decision.awardedPoints());
+            answer.setGradingStatus(decision.gradingStatus());
+            answer.setGradingSource(decision.gradingSource());
+            answer.setConfidence(decision.confidence());
+            answer.setExplanation(decision.explanation());
+            answer.setAiModel(decision.aiModel());
+            answer.setEvaluatedAt(decision.evaluatedAt());
 
-            if (correct) {
-                correctAnswers++;
-                score = score.add(answer.getAwardedPoints());
+            if (decision.gradingStatus() == GradingStatus.MANUAL_REVIEW) {
+                pendingManualReviews++;
+                continue;
             }
+
+            if (decision.correct()) {
+                correctAnswers++;
+            }
+            score = score.add(answer.getAwardedPoints());
+        }
+
+        if (pendingManualReviews > 0) {
+            attempt.setStatus(AttemptStatus.PENDING_REVIEW);
+        } else {
+            attempt.setStatus(AttemptStatus.FINALIZED);
+            attempt.setSubmittedAt(Instant.now());
         }
 
         attemptAnswerRepository.saveAll(attempt.getAnswers());
@@ -164,22 +201,23 @@ public class AttemptService {
         result.setTotalQuestions(activeQuestions.size());
         result.setPassed(score.compareTo(BigDecimal.valueOf(attempt.getAssessment().getPassScore())) >= 0);
         result.setCompletedAt(Instant.now());
-
-        attempt.setStatus(AttemptStatus.SUBMITTED);
-        attempt.setSubmittedAt(result.getCompletedAt());
+        result.setResultStatus(pendingManualReviews > 0 ? ResultStatus.PROVISIONAL : ResultStatus.FINAL);
 
         attemptRepository.save(attempt);
         assessmentResultRepository.save(result);
 
-        learningProgressGateway.publishAssessmentResult(new LearningProgressSyncRequest(
-                attempt.getUserId(),
-                attempt.getCourseId(),
-                attempt.getSectionId(),
-                attempt.getAssessment().getId(),
-                attempt.getId(),
-                result.getScore(),
-                result.getPassed(),
-                result.getCompletedAt()));
+        if (result.getResultStatus() == ResultStatus.FINAL) {
+            learningProgressGateway.publishAssessmentResult(new LearningProgressSyncRequest(
+                    attempt.getUserId(),
+                    attempt.getCourseId(),
+                    attempt.getSectionId(),
+                    attempt.getAssessment().getId(),
+                    attempt.getId(),
+                    result.getScore(),
+                    result.getPassed(),
+                    result.getResultStatus().name(),
+                    result.getCompletedAt()));
+        }
 
         return toResultResponse(result);
     }
@@ -191,6 +229,71 @@ public class AttemptService {
             throw new ConflictException(1409, "Attempt has not been submitted yet.");
         }
         return toResultResponse(attempt.getResult());
+    }
+
+    @Transactional(readOnly = true)
+    public AttemptReviewResponse getReview(UUID attemptId, UUID userId) {
+        Attempt attempt = findOwnedAttempt(attemptId, userId);
+        if (attempt.getResult() == null) {
+            throw new ConflictException(1409, "Attempt has not been submitted yet.");
+        }
+        AssessmentResult result = attempt.getResult();
+        Map<UUID, AttemptAnswer> answerByQuestion = attempt.getAnswers().stream()
+                .collect(Collectors.toMap(answer -> answer.getQuestion().getId(), Function.identity(), (left, right) -> right));
+        List<AttemptReviewAnswerResponse> answers = attempt.getAssessment().getQuestions().stream()
+                .filter(question -> Boolean.TRUE.equals(question.getActive()))
+                .sorted(Comparator.comparing(Question::getDisplayOrder))
+                .map(question -> {
+                    AttemptAnswer answer = answerByQuestion.get(question.getId());
+                    if (answer == null) {
+                        return new AttemptReviewAnswerResponse(
+                                question.getId(),
+                                question.getContent(),
+                                question.getType(),
+                                question.getDisplayOrder(),
+                                question.getPoints(),
+                                question.getPayload(),
+                                null,
+                                null,
+                                BigDecimal.ZERO,
+                                GradingStatus.PENDING,
+                                null,
+                                null,
+                                null,
+                                null);
+                    }
+                    return new AttemptReviewAnswerResponse(
+                            question.getId(),
+                            question.getContent(),
+                            question.getType(),
+                            question.getDisplayOrder(),
+                            question.getPoints(),
+                            answer.getPayloadSnapshot() == null ? question.getPayload() : answer.getPayloadSnapshot(),
+                            answer.getUserAnswer(),
+                            answer.getCorrect(),
+                            answer.getAwardedPoints(),
+                            answer.getGradingStatus(),
+                            answer.getGradingSource(),
+                            answer.getConfidence(),
+                            answer.getExplanation(),
+                            answer.getAiModel());
+                })
+                .toList();
+
+        return new AttemptReviewResponse(
+                result.getAttempt().getId(),
+                result.getAttempt().getAssessment().getId(),
+                result.getAttempt().getAssessment().getTitle(),
+                result.getScore(),
+                result.getMaxScore(),
+                result.getCorrectAnswers(),
+                result.getTotalQuestions(),
+                result.getPassed(),
+                result.getCompletedAt(),
+                result.getResultStatus(),
+                result.getAttempt().getStatus(),
+                (int) answers.stream().filter(item -> item.gradingStatus() == GradingStatus.MANUAL_REVIEW).count(),
+                answers);
     }
 
     @Transactional(readOnly = true)
@@ -209,6 +312,68 @@ public class AttemptService {
                 .toList();
     }
 
+    public AttemptResultResponse refreshResultAfterManualReview(UUID attemptId) {
+        Attempt attempt = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
+
+        List<Question> activeQuestions = attempt.getAssessment().getQuestions().stream()
+                .filter(question -> Boolean.TRUE.equals(question.getActive()))
+                .toList();
+
+        BigDecimal score = BigDecimal.ZERO;
+        int correctAnswers = 0;
+        int pendingManualReviews = 0;
+
+        for (AttemptAnswer answer : attempt.getAnswers()) {
+            if (answer.getGradingStatus() == GradingStatus.MANUAL_REVIEW || answer.getGradingStatus() == GradingStatus.PENDING) {
+                pendingManualReviews++;
+                continue;
+            }
+            score = score.add(answer.getAwardedPoints());
+            if (Boolean.TRUE.equals(answer.getCorrect())) {
+                correctAnswers++;
+            }
+        }
+
+        AssessmentResult result = attempt.getResult();
+        if (result == null) {
+            result = new AssessmentResult();
+            result.setAttempt(attempt);
+            attempt.setResult(result);
+        }
+
+        result.setScore(score);
+        result.setMaxScore(activeQuestions.stream()
+                .map(question -> BigDecimal.valueOf(question.getPoints()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        result.setCorrectAnswers(correctAnswers);
+        result.setTotalQuestions(activeQuestions.size());
+        result.setPassed(score.compareTo(BigDecimal.valueOf(attempt.getAssessment().getPassScore())) >= 0);
+        result.setCompletedAt(Instant.now());
+        result.setResultStatus(pendingManualReviews > 0 ? ResultStatus.PROVISIONAL : ResultStatus.FINAL);
+
+        if (pendingManualReviews > 0) {
+            attempt.setStatus(AttemptStatus.PENDING_REVIEW);
+        } else {
+            attempt.setStatus(AttemptStatus.FINALIZED);
+            attempt.setSubmittedAt(result.getCompletedAt());
+            learningProgressGateway.publishAssessmentResult(new LearningProgressSyncRequest(
+                    attempt.getUserId(),
+                    attempt.getCourseId(),
+                    attempt.getSectionId(),
+                    attempt.getAssessment().getId(),
+                    attempt.getId(),
+                    result.getScore(),
+                    result.getPassed(),
+                    result.getResultStatus().name(),
+                    result.getCompletedAt()));
+        }
+
+        attemptRepository.save(attempt);
+        assessmentResultRepository.save(result);
+        return toResultResponse(result);
+    }
+
     private Attempt findOwnedAttempt(UUID attemptId, UUID userId) {
         Attempt attempt = attemptRepository.findById(attemptId)
                 .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
@@ -222,7 +387,7 @@ public class AttemptService {
 
     private void ensureInProgress(Attempt attempt) {
         if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
-            throw new ConflictException(1409, "Attempt is already submitted.");
+            throw new ConflictException(1409, "Attempt is not in progress.");
         }
     }
 
@@ -258,16 +423,14 @@ public class AttemptService {
                 question.getType(),
                 question.getDisplayOrder(),
                 question.getPoints(),
-                question.getOptions().stream()
-                        .sorted(Comparator.comparing(QuestionOption::getDisplayOrder))
-                        .map(option -> new AttemptQuestionOptionResponse(
-                                option.getId(),
-                                option.getContent(),
-                                option.getDisplayOrder()))
-                        .toList());
+                question.getPayload(),
+                question.getVersion());
     }
 
     private AttemptResultResponse toResultResponse(AssessmentResult result) {
+        long pendingManualReviews = result.getAttempt().getAnswers().stream()
+                .filter(answer -> answer.getGradingStatus() == GradingStatus.MANUAL_REVIEW)
+                .count();
         return new AttemptResultResponse(
                 result.getAttempt().getId(),
                 result.getAttempt().getAssessment().getId(),
@@ -276,7 +439,10 @@ public class AttemptService {
                 result.getCorrectAnswers(),
                 result.getTotalQuestions(),
                 result.getPassed(),
-                result.getCompletedAt());
+                result.getCompletedAt(),
+                result.getResultStatus(),
+                result.getAttempt().getStatus(),
+                (int) pendingManualReviews);
     }
 
     private AttemptSummaryResponse toAttemptSummary(Attempt attempt) {

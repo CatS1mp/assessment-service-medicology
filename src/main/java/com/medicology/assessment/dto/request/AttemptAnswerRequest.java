@@ -6,7 +6,7 @@ import java.util.UUID;
 public record AttemptAnswerRequest(
         @NotNull(message = "questionId is required")
         UUID questionId,
-        @NotNull(message = "selectedOptionId is required")
-        UUID selectedOptionId
+        @NotNull(message = "userAnswer is required")
+        String userAnswer
 ) {
 }

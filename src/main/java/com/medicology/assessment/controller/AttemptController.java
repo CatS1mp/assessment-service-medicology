@@ -3,6 +3,7 @@ package com.medicology.assessment.controller;
 import com.medicology.assessment.dto.common.ApiResponse;
 import com.medicology.assessment.dto.request.AttemptAnswerRequest;
 import com.medicology.assessment.dto.response.AttemptAnswerResponse;
+import com.medicology.assessment.dto.response.AttemptReviewResponse;
 import com.medicology.assessment.dto.response.AttemptResultResponse;
 import com.medicology.assessment.dto.response.AttemptStartResponse;
 import com.medicology.assessment.dto.response.AttemptSummaryResponse;
@@ -69,6 +70,16 @@ public class AttemptController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Attempt result retrieved successfully.",
                 attemptService.getResult(attemptId, SecurityUtils.requireUserId(principal))));
+    }
+
+    @GetMapping("/api/v1/attempts/{attemptId}/review")
+    public ResponseEntity<ApiResponse<AttemptReviewResponse>> getReview(
+            @PathVariable UUID attemptId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Attempt review retrieved successfully.",
+                attemptService.getReview(attemptId, SecurityUtils.requireUserId(principal))));
     }
 
     @GetMapping("/api/v1/users/me/attempts")

@@ -13,15 +13,18 @@ import com.medicology.assessment.entity.AssessmentStatus;
 import com.medicology.assessment.entity.Attempt;
 import com.medicology.assessment.entity.AttemptAnswer;
 import com.medicology.assessment.entity.AttemptStatus;
+import com.medicology.assessment.entity.GradingSource;
+import com.medicology.assessment.entity.GradingStatus;
 import com.medicology.assessment.entity.Question;
-import com.medicology.assessment.entity.QuestionOption;
 import com.medicology.assessment.entity.QuestionType;
+import com.medicology.assessment.entity.ResultStatus;
 import com.medicology.assessment.repository.AssessmentRepository;
 import com.medicology.assessment.repository.AssessmentResultRepository;
 import com.medicology.assessment.repository.AttemptAnswerRepository;
 import com.medicology.assessment.repository.AttemptRepository;
-import com.medicology.assessment.repository.QuestionOptionRepository;
 import com.medicology.assessment.repository.QuestionRepository;
+import com.medicology.assessment.service.grading.GradingEngine;
+import com.medicology.assessment.service.grading.model.GradingDecision;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -52,7 +55,7 @@ class AttemptServiceTest {
     private QuestionRepository questionRepository;
 
     @Mock
-    private QuestionOptionRepository questionOptionRepository;
+    private GradingEngine gradingEngine;
 
     @Mock
     private LearningProgressGateway learningProgressGateway;
@@ -72,6 +75,15 @@ class AttemptServiceTest {
         when(attemptRepository.findById(attempt.getId())).thenReturn(Optional.of(attempt));
         when(attemptRepository.save(any(Attempt.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(assessmentResultRepository.save(any(AssessmentResult.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(gradingEngine.grade(any(Question.class), any(String.class))).thenReturn(new GradingDecision(
+                true,
+                BigDecimal.valueOf(5),
+                GradingStatus.FINALIZED,
+                GradingSource.RULE,
+                BigDecimal.ONE,
+                "rule",
+                null,
+                Instant.now()));
 
         AttemptResultResponse response = attemptService.submitAttempt(attempt.getId(), userId);
 
@@ -79,6 +91,7 @@ class AttemptServiceTest {
         assertThat(response.maxScore()).isEqualByComparingTo(BigDecimal.valueOf(5));
         assertThat(response.correctAnswers()).isEqualTo(1);
         assertThat(response.passed()).isTrue();
+        assertThat(response.resultStatus()).isEqualTo(ResultStatus.FINAL);
         verify(learningProgressGateway).publishAssessmentResult(any());
     }
 
@@ -96,7 +109,7 @@ class AttemptServiceTest {
         result.setPassed(true);
         result.setCompletedAt(Instant.now());
 
-        attempt.setStatus(AttemptStatus.SUBMITTED);
+        attempt.setStatus(AttemptStatus.FINALIZED);
         attempt.setResult(result);
 
         when(attemptRepository.findById(attempt.getId())).thenReturn(Optional.of(attempt));
@@ -125,15 +138,9 @@ class AttemptServiceTest {
         question.setDisplayOrder(1);
         question.setPoints(5);
         question.setActive(true);
-
-        QuestionOption correctOption = new QuestionOption();
-        correctOption.setId(UUID.randomUUID());
-        correctOption.setQuestion(question);
-        correctOption.setContent("A");
-        correctOption.setCorrect(true);
-        correctOption.setDisplayOrder(1);
-
-        question.setOptions(List.of(correctOption));
+        question.setPayload("{\"prompt\":\"Correct option?\",\"options\":[\"A\",\"B\"]}");
+        question.setAnswerKey("{\"correct\":\"A\"}");
+        question.setVersion(1);
         assessment.setQuestions(List.of(question));
         return assessment;
     }
@@ -151,7 +158,11 @@ class AttemptServiceTest {
         AttemptAnswer answer = new AttemptAnswer();
         answer.setAttempt(attempt);
         answer.setQuestion(assessment.getQuestions().get(0));
-        answer.setSelectedOption(assessment.getQuestions().get(0).getOptions().get(0));
+        answer.setUserAnswer("A");
+        answer.setQuestionVersion(1);
+        answer.setPayloadSnapshot(assessment.getQuestions().get(0).getPayload());
+        answer.setAnswerKeySnapshot(assessment.getQuestions().get(0).getAnswerKey());
+        answer.setOptionContentSnapshot(assessment.getQuestions().get(0).getPayload());
         answer.setAnsweredAt(Instant.now());
 
         attempt.setAnswers(List.of(answer));

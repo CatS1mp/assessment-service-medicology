@@ -21,4 +21,14 @@ public class AssessmentProperties {
     private String learningInternalToken = "";
     /** When true, discovery/start require enrollment in learning service */
     private boolean enrollmentCheckEnabled = false;
+    /** AI provider name used for short-answer grading (placeholder). */
+    private String aiProvider = "google-ai-studio";
+    /** AI model used for short-answer grading (placeholder). */
+    private String aiModel = "gemini-2.5-flash";
+    /** AI API key placeholder. */
+    private String aiApiKey = "";
+    /** AI endpoint placeholder for Gemini/OpenAI-compatible bridge. */
+    private String aiEndpoint = "";
+    /** Min confidence to auto-finalize AI short-answer grading. */
+    private double aiConfidenceThreshold = 0.80d;
 }

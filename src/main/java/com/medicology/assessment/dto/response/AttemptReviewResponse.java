@@ -4,11 +4,13 @@ import com.medicology.assessment.entity.AttemptStatus;
 import com.medicology.assessment.entity.ResultStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
-public record AttemptResultResponse(
+public record AttemptReviewResponse(
         UUID attemptId,
         UUID assessmentId,
+        String assessmentTitle,
         BigDecimal score,
         BigDecimal maxScore,
         Integer correctAnswers,
@@ -17,6 +19,7 @@ public record AttemptResultResponse(
         Instant completedAt,
         ResultStatus resultStatus,
         AttemptStatus attemptStatus,
-        Integer pendingManualReviews
+        Integer pendingManualReviews,
+        List<AttemptReviewAnswerResponse> answers
 ) {
 }

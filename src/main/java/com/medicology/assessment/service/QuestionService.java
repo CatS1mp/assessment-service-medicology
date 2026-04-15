@@ -1,13 +1,9 @@
 package com.medicology.assessment.service;
 
-import com.medicology.assessment.dto.request.QuestionOptionRequest;
 import com.medicology.assessment.dto.request.QuestionRequest;
-import com.medicology.assessment.dto.response.QuestionOptionResponse;
 import com.medicology.assessment.dto.response.QuestionResponse;
 import com.medicology.assessment.entity.Assessment;
 import com.medicology.assessment.entity.Question;
-import com.medicology.assessment.entity.QuestionOption;
-import com.medicology.assessment.entity.QuestionType;
 import com.medicology.assessment.exception.BadRequestException;
 import com.medicology.assessment.exception.NotFoundException;
 import com.medicology.assessment.repository.AssessmentRepository;
@@ -67,17 +63,11 @@ public class QuestionService {
     }
 
     private void validateQuestionRequest(QuestionRequest request) {
-        if (request.type() != QuestionType.SINGLE_CHOICE) {
-            throw new BadRequestException(1400, "Only SINGLE_CHOICE questions are supported in the foundation phase.");
+        if (request.payload().isBlank()) {
+            throw new BadRequestException(1400, "payload must not be blank.");
         }
-
-        long correctOptions = request.options()
-                .stream()
-                .filter(QuestionOptionRequest::correct)
-                .count();
-
-        if (correctOptions != 1) {
-            throw new BadRequestException(1400, "A SINGLE_CHOICE question must contain exactly one correct option.");
+        if (request.answerKey().isBlank()) {
+            throw new BadRequestException(1400, "answerKey must not be blank.");
         }
     }
 
@@ -88,19 +78,13 @@ public class QuestionService {
         question.setDisplayOrder(request.displayOrder());
         question.setPoints(request.points());
         question.setActive(request.active() == null ? Boolean.TRUE : request.active());
-
-        question.clearOptions();
-        request.options().stream()
-                .sorted((left, right) -> Integer.compare(left.displayOrder(), right.displayOrder()))
-                .forEach(optionRequest -> question.addOption(toOptionEntity(optionRequest)));
-    }
-
-    private QuestionOption toOptionEntity(QuestionOptionRequest request) {
-        QuestionOption option = new QuestionOption();
-        option.setContent(request.content().trim());
-        option.setCorrect(request.correct());
-        option.setDisplayOrder(request.displayOrder());
-        return option;
+        question.setPayload(request.payload());
+        question.setAnswerKey(request.answerKey());
+        if (question.getId() == null) {
+            question.setVersion(1);
+        } else {
+            question.setVersion(question.getVersion() == null ? 1 : question.getVersion() + 1);
+        }
     }
 
     private QuestionResponse toQuestionResponse(Question question) {
@@ -112,14 +96,8 @@ public class QuestionService {
                 question.getDisplayOrder(),
                 question.getPoints(),
                 question.getActive(),
-                question.getOptions().stream().map(this::toOptionResponse).toList());
-    }
-
-    private QuestionOptionResponse toOptionResponse(QuestionOption option) {
-        return new QuestionOptionResponse(
-                option.getId(),
-                option.getContent(),
-                option.getCorrect(),
-                option.getDisplayOrder());
+                question.getPayload(),
+                question.getAnswerKey(),
+                question.getVersion());
     }
 }
