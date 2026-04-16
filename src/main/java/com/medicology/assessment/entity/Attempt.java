@@ -68,7 +68,7 @@ public class Attempt {
     @OneToMany(mappedBy = "attempt", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<AttemptAnswer> answers = new ArrayList<>();
 
-    @OneToOne(mappedBy = "attempt", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToOne(mappedBy = "attempt")
     private AssessmentResult result;
 
     @PrePersist

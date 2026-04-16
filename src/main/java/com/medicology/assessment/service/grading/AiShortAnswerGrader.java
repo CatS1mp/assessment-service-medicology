@@ -17,6 +17,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,7 @@ import org.springframework.stereotype.Component;
 public class AiShortAnswerGrader {
 
     private static final Logger log = LoggerFactory.getLogger(AiShortAnswerGrader.class);
+    private static final BigDecimal AUTO_INCORRECT_MAX_CONFIDENCE = new BigDecimal("0.70");
 
     private final AssessmentProperties assessmentProperties;
     private final ObjectMapper objectMapper;
@@ -42,29 +44,52 @@ public class AiShortAnswerGrader {
                 userAnswer == null ? 0 : userAnswer.length());
         AiEvaluationResponse aiResponse = evaluateWithProvider(question, userAnswer);
         BigDecimal confidenceThreshold = BigDecimal.valueOf(assessmentProperties.getAiConfidenceThreshold());
-        if (aiResponse.confidence() == null || aiResponse.confidence().compareTo(confidenceThreshold) < 0) {
+        BigDecimal confidence = aiResponse.confidence() == null ? BigDecimal.ZERO : aiResponse.confidence();
+
+        // Strict policy requested:
+        // - confidence <= 0.70 => auto incorrect (finalized)
+        // - 0.70 < confidence < threshold(0.80 default) => manual review
+        // - confidence >= threshold => finalize with AI verdict
+        if (confidence.compareTo(AUTO_INCORRECT_MAX_CONFIDENCE) <= 0) {
+            log.warn(
+                    "ai_grading_auto_incorrect questionId={} confidence={} reason={}",
+                    question.getId(),
+                    confidence,
+                    aiResponse.explanation());
+            return new GradingDecision(
+                    false,
+                    BigDecimal.ZERO,
+                    GradingStatus.FINALIZED,
+                    GradingSource.AI,
+                    confidence,
+                    "AI confidence is <= 0.70, auto-marked incorrect. " + aiResponse.explanation(),
+                    assessmentProperties.getAiModel(),
+                    Instant.now());
+        }
+
+        if (confidence.compareTo(confidenceThreshold) < 0) {
             log.warn(
                     "ai_grading_manual_review questionId={} confidence={} threshold={} reason={}",
                     question.getId(),
-                    aiResponse.confidence(),
+                    confidence,
                     confidenceThreshold,
                     aiResponse.explanation());
             return GradingDecision.manualReview(
-                    "AI confidence below threshold (" + confidenceThreshold + "). Review required.");
+                    "AI confidence in manual-review band (0.70, " + confidenceThreshold + "). Review required.");
         }
 
         boolean correct = aiResponse.correct();
         log.info(
                 "ai_grading_finalized questionId={} confidence={} correct={}",
                 question.getId(),
-                aiResponse.confidence(),
+                confidence,
                 correct);
         return new GradingDecision(
                 correct,
                 correct ? BigDecimal.valueOf(question.getPoints()) : BigDecimal.ZERO,
                 GradingStatus.FINALIZED,
                 GradingSource.AI,
-                aiResponse.confidence(),
+                confidence,
                 aiResponse.explanation(),
                 assessmentProperties.getAiModel(),
                 Instant.now());
@@ -84,13 +109,19 @@ public class AiShortAnswerGrader {
             String endpoint = resolveEndpoint(assessmentProperties.getAiModel());
             String prompt = buildPrompt(question, userAnswer);
 
-            String requestBody = objectMapper.writeValueAsString(Map.of(
-                    "contents",
-                    List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
-                    "generationConfig",
-                    Map.of(
-                            "temperature", 0.1,
-                            "responseMimeType", "application/json")));
+            List<Map<String, Object>> tools = new ArrayList<>();
+            if (assessmentProperties.isAiGroundingEnabled()) {
+                tools.add(Map.of("google_search", Map.of()));
+            }
+            Map<String, Object> requestPayload = new java.util.LinkedHashMap<>();
+            requestPayload.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+            requestPayload.put("generationConfig", Map.of(
+                    "temperature", 0.1,
+                    "responseMimeType", "application/json"));
+            if (!tools.isEmpty()) {
+                requestPayload.put("tools", tools);
+            }
+            String requestBody = objectMapper.writeValueAsString(requestPayload);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(appendApiKey(endpoint, apiKey)))
@@ -133,6 +164,20 @@ public class AiShortAnswerGrader {
             boolean correct = aiJson.path("correct").asBoolean(false);
             BigDecimal confidence = parseConfidence(aiJson.path("confidence"));
             String explanation = aiJson.path("explanation").asText("AI explanation is unavailable.");
+            List<String> suggestions = parseSuggestions(aiJson.path("suggestedCorrectAnswers"));
+            String reason = aiJson.path("reason").asText("").trim();
+            if (!reason.isBlank()) {
+                explanation = reason + ". " + explanation;
+            }
+            if (!correct && !suggestions.isEmpty()) {
+                explanation = explanation + " Suggested answers: " + String.join("; ", suggestions) + ".";
+            } else if (!correct) {
+                String fallback = extractExpectedReference(question.getAnswerKey());
+                if (!fallback.isBlank()) {
+                    explanation = explanation + " Suggested answers: " + fallback + ".";
+                }
+            }
+            explanation = sanitizeExplanation(explanation);
             log.debug(
                     "ai_grading_provider_success questionId={} confidence={} correct={}",
                     question.getId(),
@@ -164,20 +209,44 @@ public class AiShortAnswerGrader {
     private String buildPrompt(Question question, String userAnswer) {
         String answerReference = extractExpectedReference(question.getAnswerKey());
         return """
-        You are grading a short-answer response for medical learning.
-        Return ONLY JSON (no markdown) with schema:
+        You are a practical short-answer medical grader.
+        You must evaluate semantic correctness against BOTH:
+        1) reference answer from instructor, and
+        2) up-to-date trusted medical information from web search.
+        Use web-grounded evidence to validate whether the reference answer is still medically correct.
+        If the reference answer conflicts with high-confidence medical consensus, explain the conflict clearly.
+
+        Prefer concept-level understanding over exact wording.
+        Do not reward clinically incorrect statements.
+        Never infer extra facts that are not present in learner answer.
+        If the learner answer is too vague, contradictory, unsafe, or off-topic, mark incorrect.
+
+        Return ONLY valid JSON (no markdown, no prose) with exact schema:
         {
         "correct": boolean,
         "confidence": number,
+        "reason": string,
         "explanation": string,
-        "suggestedCorrectAnswers": string[]
+        "suggestedCorrectAnswers": string[],
+        "gradingCriteria": string[]
         }
 
-        Rules:
-        - confidence range 0.0 to 1.0
-        - if incorrect, include 2-3 suggestedCorrectAnswers
-        - if correct, suggestedCorrectAnswers must be []
-        - explanation must be concise and learner-friendly
+        Hard rules:
+        - confidence must be in [0.0, 1.0]
+        - confidence should reflect semantic certainty, not exact keyword overlap
+        - NEVER mention confidence value in reason/explanation text
+        - reason must explicitly state why learner answer is wrong or right in one sentence
+        - if incorrect: explanation is mandatory and must clearly say what is missing/wrong
+        - if incorrect: provide 2-3 concise suggestedCorrectAnswers (each <= 20 words)
+        - if correct: suggestedCorrectAnswers must be []
+        - explanation must be concise, learner-friendly, and mention why correct/incorrect
+        - gradingCriteria must contain 3-6 short bullet-like criteria used in grading
+        - prioritize patient safety and clinical accuracy when judging equivalence
+        - ignore grammar/spelling if medical meaning remains correct
+        - accept medically equivalent terminology and common abbreviations only when unambiguous
+        - if answer includes both correct and clearly wrong clinical claims, mark incorrect
+        - if web evidence and reference answer diverge, prefer safer and better-supported medical evidence
+        - make grading easier/fairer: if learner answer captures core medical concept and has no dangerous error, it can be correct
 
         Question:
         %s
@@ -206,6 +275,28 @@ public class AiShortAnswerGrader {
         } catch (Exception ex) {
             return BigDecimal.ZERO;
         }
+    }
+
+    private List<String> parseSuggestions(JsonNode node) {
+        if (node == null || node.isMissingNode() || !node.isArray()) {
+            return List.of();
+        }
+        List<String> suggestions = new ArrayList<>();
+        for (JsonNode item : node) {
+            String value = item == null ? "" : item.asText("").trim();
+            if (!value.isBlank()) {
+                suggestions.add(value);
+            }
+        }
+        return suggestions;
+    }
+
+    private String sanitizeExplanation(String explanation) {
+        if (explanation == null || explanation.isBlank()) {
+            return "AI did not provide a detailed explanation.";
+        }
+        // Do not surface confidence percentages in learner-facing explanation.
+        return explanation.replaceAll("(?i)confidence\\s*[:=]?\\s*\\d+(?:\\.\\d+)?%?", "").trim();
     }
 
     private String extractExpectedReference(String answerKey) {

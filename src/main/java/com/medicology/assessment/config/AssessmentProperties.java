@@ -29,6 +29,8 @@ public class AssessmentProperties {
     private String aiApiKey = "";
     /** AI endpoint placeholder for Gemini/OpenAI-compatible bridge. */
     private String aiEndpoint = "";
+    /** Enable Gemini web grounding via Google Search tool. */
+    private boolean aiGroundingEnabled = true;
     /** Min confidence to auto-finalize AI short-answer grading. */
     private double aiConfidenceThreshold = 0.80d;
 }

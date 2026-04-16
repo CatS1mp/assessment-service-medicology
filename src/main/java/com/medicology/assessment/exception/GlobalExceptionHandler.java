@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -74,6 +75,30 @@ public class GlobalExceptionHandler {
                         HttpStatus.BAD_REQUEST.value(),
                         1400,
                         exception.getMessage(),
+                        request.getRequestURI(),
+                        Instant.now()));
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException exception,
+            HttpServletRequest request) {
+        String allowedMethods = exception.getSupportedHttpMethods() == null
+                ? ""
+                : exception.getSupportedHttpMethods().stream().map(Object::toString).collect(Collectors.joining(","));
+        log.warn(
+                "method_not_supported method={} path={} query={} referer={} userAgent={} allowed={}",
+                request.getMethod(),
+                request.getRequestURI(),
+                request.getQueryString(),
+                request.getHeader("Referer"),
+                request.getHeader("User-Agent"),
+                allowedMethods);
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(new ErrorResponse(
+                        HttpStatus.METHOD_NOT_ALLOWED.value(),
+                        1405,
+                        "Request method '" + request.getMethod() + "' is not supported for this endpoint.",
                         request.getRequestURI(),
                         Instant.now()));
     }

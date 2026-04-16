@@ -48,6 +48,11 @@ public class HttpLearningProgressGateway implements LearningProgressGateway {
                     e.getStatusCode(),
                     request.attemptId(),
                     e.getResponseBodyAsString());
+        } catch (Exception e) {
+            log.warn(
+                    "learning_sync_transport_failed attemptId={} message={}",
+                    request.attemptId(),
+                    e.getMessage());
         }
     }
 }

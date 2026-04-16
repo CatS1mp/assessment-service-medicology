@@ -38,6 +38,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -125,7 +126,7 @@ public class AttemptService {
     }
 
     public AttemptResultResponse submitAttempt(UUID attemptId, UUID userId) {
-        Attempt attempt = findOwnedAttempt(attemptId, userId);
+        Attempt attempt = findOwnedAttemptForUpdate(attemptId, userId);
 
         if ((attempt.getStatus() == AttemptStatus.SUBMITTED
                 || attempt.getStatus() == AttemptStatus.FINALIZED
@@ -188,12 +189,7 @@ public class AttemptService {
 
         attemptAnswerRepository.saveAll(attempt.getAnswers());
 
-        AssessmentResult result = attempt.getResult();
-        if (result == null) {
-            result = new AssessmentResult();
-            result.setAttempt(attempt);
-            attempt.setResult(result);
-        }
+        AssessmentResult result = resolveOrCreateResult(attempt);
 
         result.setScore(score);
         result.setMaxScore(maxScore);
@@ -204,7 +200,7 @@ public class AttemptService {
         result.setResultStatus(pendingManualReviews > 0 ? ResultStatus.PROVISIONAL : ResultStatus.FINAL);
 
         attemptRepository.save(attempt);
-        assessmentResultRepository.save(result);
+        result = saveResultIdempotently(attempt, result);
 
         if (result.getResultStatus() == ResultStatus.FINAL) {
             learningProgressGateway.publishAssessmentResult(new LearningProgressSyncRequest(
@@ -313,7 +309,7 @@ public class AttemptService {
     }
 
     public AttemptResultResponse refreshResultAfterManualReview(UUID attemptId) {
-        Attempt attempt = attemptRepository.findById(attemptId)
+        Attempt attempt = attemptRepository.findByIdForUpdate(attemptId)
                 .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
 
         List<Question> activeQuestions = attempt.getAssessment().getQuestions().stream()
@@ -335,12 +331,7 @@ public class AttemptService {
             }
         }
 
-        AssessmentResult result = attempt.getResult();
-        if (result == null) {
-            result = new AssessmentResult();
-            result.setAttempt(attempt);
-            attempt.setResult(result);
-        }
+        AssessmentResult result = resolveOrCreateResult(attempt);
 
         result.setScore(score);
         result.setMaxScore(activeQuestions.stream()
@@ -370,7 +361,7 @@ public class AttemptService {
         }
 
         attemptRepository.save(attempt);
-        assessmentResultRepository.save(result);
+        result = saveResultIdempotently(attempt, result);
         return toResultResponse(result);
     }
 
@@ -383,6 +374,53 @@ public class AttemptService {
         }
 
         return attempt;
+    }
+
+    private Attempt findOwnedAttemptForUpdate(UUID attemptId, UUID userId) {
+        Attempt attempt = attemptRepository.findByIdForUpdate(attemptId)
+                .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
+
+        if (!attempt.getUserId().equals(userId)) {
+            throw new NotFoundException(1404, "Attempt not found for current user.");
+        }
+
+        return attempt;
+    }
+
+    private AssessmentResult resolveOrCreateResult(Attempt attempt) {
+        AssessmentResult result = attempt.getResult();
+        if (result != null) {
+            return result;
+        }
+        return assessmentResultRepository.findByAttempt_Id(attempt.getId())
+                .map(existing -> {
+                    attempt.setResult(existing);
+                    return existing;
+                })
+                .orElseGet(() -> {
+                    AssessmentResult created = new AssessmentResult();
+                    created.setAttempt(attempt);
+                    attempt.setResult(created);
+                    return created;
+                });
+    }
+
+    private AssessmentResult saveResultIdempotently(Attempt attempt, AssessmentResult candidate) {
+        try {
+            return assessmentResultRepository.saveAndFlush(candidate);
+        } catch (DataIntegrityViolationException ex) {
+            AssessmentResult existing = assessmentResultRepository.findByAttempt_Id(attempt.getId())
+                    .orElseThrow(() -> ex);
+            existing.setScore(candidate.getScore());
+            existing.setMaxScore(candidate.getMaxScore());
+            existing.setCorrectAnswers(candidate.getCorrectAnswers());
+            existing.setTotalQuestions(candidate.getTotalQuestions());
+            existing.setPassed(candidate.getPassed());
+            existing.setCompletedAt(candidate.getCompletedAt());
+            existing.setResultStatus(candidate.getResultStatus());
+            attempt.setResult(existing);
+            return assessmentResultRepository.save(existing);
+        }
     }
 
     private void ensureInProgress(Attempt attempt) {
