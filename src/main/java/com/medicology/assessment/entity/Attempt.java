@@ -5,13 +5,10 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.PrePersist;
@@ -28,9 +25,9 @@ import lombok.Setter;
 @Table(
         name = "attempts",
         indexes = {
-                @Index(name = "idx_attempt_user", columnList = "userId"),
-                @Index(name = "idx_attempt_assessment", columnList = "assessment_id"),
-                @Index(name = "idx_attempt_started", columnList = "startedAt")
+                @Index(name = "idx_attempt_user", columnList = "user_id"),
+                @Index(name = "idx_attempt_content", columnList = "content_id"),
+                @Index(name = "idx_attempt_started", columnList = "started_at")
         })
 @Getter
 @Setter
@@ -41,28 +38,23 @@ public class Attempt {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "assessment_id", nullable = false)
-    private Assessment assessment;
-
-    @Column(nullable = false)
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    @Column(nullable = false)
-    private UUID courseId;
+    @Column(name = "content_id", nullable = false)
+    private UUID contentId;
 
-    @Column(nullable = false)
-    private UUID sectionId;
-
-    private UUID lessonId;
+    @Column(name = "remaining_seconds", nullable = false)
+    private Integer remainingSeconds;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private AttemptStatus status = AttemptStatus.IN_PROGRESS;
 
-    @Column(nullable = false, updatable = false)
+    @Column(name = "started_at", nullable = false)
     private Instant startedAt;
 
+    @Column(name = "submitted_at")
     private Instant submittedAt;
 
     @OneToMany(mappedBy = "attempt", cascade = CascadeType.ALL, orphanRemoval = true)

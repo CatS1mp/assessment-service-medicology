@@ -7,13 +7,11 @@ import java.util.UUID;
 public record ManualReviewItemResponse(
         UUID attemptAnswerId,
         UUID attemptId,
-        UUID questionId,
-        String questionContent,
+        UUID contentBlockId,
+        String kindSnapshot,
+        String promptSnapshot,
         String userAnswer,
         String payloadSnapshot,
-        String answerKeySnapshot,
         BigDecimal confidence,
         String explanation,
-        Instant answeredAt
-) {
-}
+        Instant answeredAt) {}

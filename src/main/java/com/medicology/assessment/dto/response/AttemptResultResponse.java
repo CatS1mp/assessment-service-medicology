@@ -8,7 +8,7 @@ import java.util.UUID;
 
 public record AttemptResultResponse(
         UUID attemptId,
-        UUID assessmentId,
+        UUID contentId,
         BigDecimal score,
         BigDecimal maxScore,
         Integer correctAnswers,
@@ -17,6 +17,4 @@ public record AttemptResultResponse(
         Instant completedAt,
         ResultStatus resultStatus,
         AttemptStatus attemptStatus,
-        Integer pendingManualReviews
-) {
-}
+        Integer pendingManualReviews) {}

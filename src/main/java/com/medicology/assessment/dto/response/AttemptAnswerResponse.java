@@ -6,9 +6,7 @@ import java.util.UUID;
 
 public record AttemptAnswerResponse(
         UUID attemptId,
-        UUID questionId,
+        UUID contentBlockId,
         String userAnswer,
         GradingStatus gradingStatus,
-        Instant answeredAt
-) {
-}
+        Instant answeredAt) {}

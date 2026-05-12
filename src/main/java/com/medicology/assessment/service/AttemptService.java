@@ -1,44 +1,42 @@
 package com.medicology.assessment.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.medicology.assessment.dto.request.AttemptAnswerRequest;
-import com.medicology.assessment.dto.request.LearningProgressSyncRequest;
+import com.medicology.assessment.dto.request.AttemptStartRequest;
+import com.medicology.assessment.dto.request.AttemptTickRequest;
+import com.medicology.assessment.dto.response.AttemptAnswerLookupResponse;
 import com.medicology.assessment.dto.response.AttemptAnswerResponse;
-import com.medicology.assessment.dto.response.AttemptQuestionResponse;
+import com.medicology.assessment.dto.response.AttemptInProgressItemResponse;
+import com.medicology.assessment.dto.response.AttemptResultResponse;
 import com.medicology.assessment.dto.response.AttemptReviewAnswerResponse;
 import com.medicology.assessment.dto.response.AttemptReviewResponse;
-import com.medicology.assessment.dto.response.AttemptResultResponse;
 import com.medicology.assessment.dto.response.AttemptStartResponse;
 import com.medicology.assessment.dto.response.AttemptSummaryResponse;
-import com.medicology.assessment.entity.Assessment;
+import com.medicology.assessment.dto.response.AttemptTickResponse;
 import com.medicology.assessment.entity.AssessmentResult;
-import com.medicology.assessment.entity.AssessmentStatus;
 import com.medicology.assessment.entity.Attempt;
 import com.medicology.assessment.entity.AttemptAnswer;
 import com.medicology.assessment.entity.AttemptStatus;
 import com.medicology.assessment.entity.GradingStatus;
-import com.medicology.assessment.entity.Question;
 import com.medicology.assessment.entity.ResultStatus;
 import com.medicology.assessment.exception.ConflictException;
 import com.medicology.assessment.exception.NotFoundException;
-import com.medicology.assessment.repository.AssessmentRepository;
 import com.medicology.assessment.repository.AssessmentResultRepository;
 import com.medicology.assessment.repository.AttemptAnswerRepository;
 import com.medicology.assessment.repository.AttemptRepository;
-import com.medicology.assessment.repository.QuestionRepository;
 import com.medicology.assessment.service.grading.GradingEngine;
+import com.medicology.assessment.service.grading.model.ContentBlockSnapshot;
 import com.medicology.assessment.service.grading.model.GradingDecision;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Sort;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,65 +45,72 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 public class AttemptService {
 
-    private final AssessmentRepository assessmentRepository;
+    private static final BigDecimal PASS_RATIO = new BigDecimal("0.5");
+    private static final int DEFAULT_DURATION_MINUTES = 7;
+
     private final AttemptRepository attemptRepository;
     private final AttemptAnswerRepository attemptAnswerRepository;
     private final AssessmentResultRepository assessmentResultRepository;
-    private final QuestionRepository questionRepository;
     private final GradingEngine gradingEngine;
-    private final LearningProgressGateway learningProgressGateway;
-    private final LearningEnrollmentClient learningEnrollmentClient;
+    private final ObjectMapper objectMapper;
 
-    public AttemptStartResponse startAttempt(UUID assessmentId, UUID userId) {
-        Assessment assessment = assessmentRepository.findById(assessmentId)
-                .orElseThrow(() -> new NotFoundException(1404, "Assessment not found: " + assessmentId));
-
-        if (assessment.getStatus() != AssessmentStatus.PUBLISHED || !Boolean.TRUE.equals(assessment.getActive())) {
-            throw new ConflictException(1409, "Assessment is not available for submission.");
-        }
-
-        learningEnrollmentClient.assertCanAccessAssessment(userId, assessment.getSectionId(), assessment.getLessonId());
-
-        Attempt existingAttempt = attemptRepository
-                .findTopByAssessment_IdAndUserIdAndStatusOrderByStartedAtDesc(assessmentId, userId, AttemptStatus.IN_PROGRESS)
-                .orElse(null);
-        if (existingAttempt != null) {
-            return toStartResponse(existingAttempt);
-        }
-
-        Attempt attempt = new Attempt();
-        attempt.setAssessment(assessment);
-        attempt.setUserId(userId);
-        attempt.setCourseId(assessment.getCourseId());
-        attempt.setSectionId(assessment.getSectionId());
-        attempt.setLessonId(assessment.getLessonId());
-        attempt.setStatus(AttemptStatus.IN_PROGRESS);
-
-        return toStartResponse(attemptRepository.save(attempt));
+    public AttemptStartResponse startAttempt(UUID contentId, UUID userId, AttemptStartRequest request) {
+        return attemptRepository
+                .findTopByContentIdAndUserIdAndStatusOrderByStartedAtDesc(contentId, userId, AttemptStatus.IN_PROGRESS)
+                .map(a -> new AttemptStartResponse(
+                        a.getId(), contentId, a.getStatus(), a.getStartedAt(), a.getRemainingSeconds()))
+                .orElseGet(() -> {
+                    int minutes = request != null && request.estimatedDurationMinutes() != null
+                            ? Math.max(1, request.estimatedDurationMinutes())
+                            : DEFAULT_DURATION_MINUTES;
+                    Attempt attempt = new Attempt();
+                    attempt.setUserId(userId);
+                    attempt.setContentId(contentId);
+                    attempt.setRemainingSeconds(minutes * 60);
+                    attempt.setStatus(AttemptStatus.IN_PROGRESS);
+                    Attempt saved = attemptRepository.save(attempt);
+                    return new AttemptStartResponse(
+                            saved.getId(), contentId, saved.getStatus(), saved.getStartedAt(), saved.getRemainingSeconds());
+                });
     }
 
     public AttemptAnswerResponse saveAnswer(UUID attemptId, UUID userId, AttemptAnswerRequest request) {
         Attempt attempt = findOwnedAttempt(attemptId, userId);
         ensureInProgress(attempt);
-        ensureWithinTimeLimit(attempt);
+        ensureTimeRemaining(attempt);
 
-        Question question = questionRepository.findByIdAndAssessment_Id(request.questionId(), attempt.getAssessment().getId())
-                .orElseThrow(() -> new NotFoundException(1404, "Question not found for attempt."));
+        if (!request.contentId().equals(attempt.getContentId())) {
+            throw new ConflictException(1409, "Content block does not belong to this attempt's content.");
+        }
+        if (Boolean.FALSE.equals(request.isGradable())) {
+            throw new ConflictException(1409, "This block is not gradable.");
+        }
 
-        AttemptAnswer answer = attemptAnswerRepository.findByAttempt_IdAndQuestion_Id(attemptId, question.getId())
+        AttemptAnswer answer = attemptAnswerRepository
+                .findByAttempt_IdAndContentBlockId(attemptId, request.contentBlockId())
                 .orElseGet(() -> {
                     AttemptAnswer created = new AttemptAnswer();
                     created.setAttempt(attempt);
-                    created.setQuestion(question);
+                    created.setContentBlockId(request.contentBlockId());
                     attempt.addAnswer(created);
                     return created;
                 });
 
+        ContentBlockSnapshot snap = new ContentBlockSnapshot(
+                request.contentBlockId(),
+                request.contentId(),
+                request.kind(),
+                request.payload(),
+                request.maxScore(),
+                request.orderIndex(),
+                request.isGradable() == null ? Boolean.TRUE : request.isGradable());
+
+        answer.setKindSnapshot(snap.kind());
+        answer.setBlockOrderIndex(snap.orderIndex());
+        answer.setPromptSnapshot(extractPrompt(snap.payload(), snap.kind()));
+        answer.setMaxScoreSnapshot(snap.resolvedMaxPoints());
         answer.setUserAnswer(request.userAnswer());
-        answer.setQuestionVersion(question.getVersion());
-        answer.setPayloadSnapshot(question.getPayload());
-        answer.setAnswerKeySnapshot(question.getAnswerKey());
-        answer.setOptionContentSnapshot(question.getPayload());
+        answer.setPayloadSnapshot(snap.payload());
         answer.setGradingStatus(GradingStatus.PENDING);
         answer.setGradingSource(null);
         answer.setConfidence(null);
@@ -115,51 +120,77 @@ public class AttemptService {
         answer.setEvaluatedBy(null);
         answer.setCorrect(Boolean.FALSE);
         answer.setAwardedPoints(BigDecimal.ZERO);
+
         AttemptAnswer persisted = attemptAnswerRepository.save(answer);
 
         return new AttemptAnswerResponse(
                 persisted.getAttempt().getId(),
-                persisted.getQuestion().getId(),
+                request.contentBlockId(),
                 persisted.getUserAnswer(),
                 persisted.getGradingStatus(),
                 persisted.getAnsweredAt());
+    }
+
+    @Transactional(readOnly = true)
+    public AttemptAnswerLookupResponse getAnswer(UUID attemptId, UUID contentBlockId, UUID userId) {
+        findOwnedAttempt(attemptId, userId);
+        return attemptAnswerRepository
+                .findByAttempt_IdAndContentBlockId(attemptId, contentBlockId)
+                .map(a -> new AttemptAnswerLookupResponse(a.getUserAnswer()))
+                .orElseGet(() -> new AttemptAnswerLookupResponse(null));
+    }
+
+    public AttemptTickResponse tickRemaining(UUID attemptId, UUID userId, AttemptTickRequest request) {
+        int delta = request == null || request.deltaSeconds() == null || request.deltaSeconds() < 1
+                ? 60
+                : request.deltaSeconds();
+        Attempt attempt = findOwnedAttemptForUpdate(attemptId, userId);
+        ensureInProgress(attempt);
+        int next = Math.max(0, attempt.getRemainingSeconds() - delta);
+        attempt.setRemainingSeconds(next);
+        attemptRepository.saveAndFlush(attempt);
+        if (next <= 0) {
+            submitAttempt(attemptId, userId);
+            Attempt updated = findOwnedAttempt(attemptId, userId);
+            return new AttemptTickResponse(updated.getRemainingSeconds());
+        }
+        return new AttemptTickResponse(next);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AttemptInProgressItemResponse> getInProgressAttempts(UUID userId) {
+        return attemptRepository.findByUserIdAndStatus(userId, AttemptStatus.IN_PROGRESS).stream()
+                .map(a -> new AttemptInProgressItemResponse(a.getId(), a.getContentId(), a.getRemainingSeconds()))
+                .toList();
     }
 
     public AttemptResultResponse submitAttempt(UUID attemptId, UUID userId) {
         Attempt attempt = findOwnedAttemptForUpdate(attemptId, userId);
 
         if ((attempt.getStatus() == AttemptStatus.SUBMITTED
-                || attempt.getStatus() == AttemptStatus.FINALIZED
-                || attempt.getStatus() == AttemptStatus.PENDING_REVIEW)
+                        || attempt.getStatus() == AttemptStatus.FINALIZED
+                        || attempt.getStatus() == AttemptStatus.PENDING_REVIEW)
                 && attempt.getResult() != null) {
             return toResultResponse(attempt.getResult());
         }
 
         ensureInProgress(attempt);
-        ensureWithinTimeLimit(attempt);
 
-        List<Question> activeQuestions = attempt.getAssessment().getQuestions().stream()
-                .filter(question -> Boolean.TRUE.equals(question.getActive()))
-                .sorted(Comparator.comparing(Question::getDisplayOrder))
+        List<AttemptAnswer> answers = attempt.getAnswers().stream()
+                .sorted(Comparator.comparing(AttemptAnswer::getBlockOrderIndex, Comparator.nullsLast(Integer::compareTo)))
                 .toList();
-        Map<UUID, AttemptAnswer> answerByQuestionId = attempt.getAnswers().stream()
-                .collect(Collectors.toMap(answer -> answer.getQuestion().getId(), Function.identity(), (left, right) -> right));
 
-        BigDecimal maxScore = activeQuestions.stream()
-                .map(question -> BigDecimal.valueOf(question.getPoints()))
+        BigDecimal maxScore = answers.stream()
+                .map(a -> BigDecimal.valueOf(resolveMaxPoints(a)))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal score = BigDecimal.ZERO;
         int correctAnswers = 0;
         int pendingManualReviews = 0;
 
-        for (Question question : activeQuestions) {
-            AttemptAnswer answer = answerByQuestionId.get(question.getId());
-            if (answer == null) {
-                continue;
-            }
-
-            GradingDecision decision = gradingEngine.grade(question, answer.getUserAnswer());
+        for (AttemptAnswer answer : answers) {
+            ContentBlockSnapshot snapshot = snapshotFromAnswer(attempt, answer);
+            GradingDecision decision = gradingEngine.grade(snapshot, answer.getUserAnswer());
             answer.setCorrect(decision.correct());
             answer.setAwardedPoints(decision.awardedPoints());
             answer.setGradingStatus(decision.gradingStatus());
@@ -173,8 +204,7 @@ public class AttemptService {
                 pendingManualReviews++;
                 continue;
             }
-
-            if (decision.correct()) {
+            if (Boolean.TRUE.equals(decision.correct())) {
                 correctAnswers++;
             }
             score = score.add(answer.getAwardedPoints());
@@ -187,33 +217,19 @@ public class AttemptService {
             attempt.setSubmittedAt(Instant.now());
         }
 
-        attemptAnswerRepository.saveAll(attempt.getAnswers());
+        attemptAnswerRepository.saveAll(answers);
 
         AssessmentResult result = resolveOrCreateResult(attempt);
-
         result.setScore(score);
         result.setMaxScore(maxScore);
         result.setCorrectAnswers(correctAnswers);
-        result.setTotalQuestions(activeQuestions.size());
-        result.setPassed(score.compareTo(BigDecimal.valueOf(attempt.getAssessment().getPassScore())) >= 0);
+        result.setTotalQuestions(answers.size());
+        result.setPassed(computePassed(score, maxScore));
         result.setCompletedAt(Instant.now());
         result.setResultStatus(pendingManualReviews > 0 ? ResultStatus.PROVISIONAL : ResultStatus.FINAL);
 
         attemptRepository.save(attempt);
         result = saveResultIdempotently(attempt, result);
-
-        if (result.getResultStatus() == ResultStatus.FINAL) {
-            learningProgressGateway.publishAssessmentResult(new LearningProgressSyncRequest(
-                    attempt.getUserId(),
-                    attempt.getCourseId(),
-                    attempt.getSectionId(),
-                    attempt.getAssessment().getId(),
-                    attempt.getId(),
-                    result.getScore(),
-                    result.getPassed(),
-                    result.getResultStatus().name(),
-                    result.getCompletedAt()));
-        }
 
         return toResultResponse(result);
     }
@@ -234,52 +250,27 @@ public class AttemptService {
             throw new ConflictException(1409, "Attempt has not been submitted yet.");
         }
         AssessmentResult result = attempt.getResult();
-        Map<UUID, AttemptAnswer> answerByQuestion = attempt.getAnswers().stream()
-                .collect(Collectors.toMap(answer -> answer.getQuestion().getId(), Function.identity(), (left, right) -> right));
-        List<AttemptReviewAnswerResponse> answers = attempt.getAssessment().getQuestions().stream()
-                .filter(question -> Boolean.TRUE.equals(question.getActive()))
-                .sorted(Comparator.comparing(Question::getDisplayOrder))
-                .map(question -> {
-                    AttemptAnswer answer = answerByQuestion.get(question.getId());
-                    if (answer == null) {
-                        return new AttemptReviewAnswerResponse(
-                                question.getId(),
-                                question.getContent(),
-                                question.getType(),
-                                question.getDisplayOrder(),
-                                question.getPoints(),
-                                question.getPayload(),
-                                null,
-                                null,
-                                BigDecimal.ZERO,
-                                GradingStatus.PENDING,
-                                null,
-                                null,
-                                null,
-                                null);
-                    }
-                    return new AttemptReviewAnswerResponse(
-                            question.getId(),
-                            question.getContent(),
-                            question.getType(),
-                            question.getDisplayOrder(),
-                            question.getPoints(),
-                            answer.getPayloadSnapshot() == null ? question.getPayload() : answer.getPayloadSnapshot(),
-                            answer.getUserAnswer(),
-                            answer.getCorrect(),
-                            answer.getAwardedPoints(),
-                            answer.getGradingStatus(),
-                            answer.getGradingSource(),
-                            answer.getConfidence(),
-                            answer.getExplanation(),
-                            answer.getAiModel());
-                })
+        List<AttemptReviewAnswerResponse> answers = attempt.getAnswers().stream()
+                .sorted(Comparator.comparing(AttemptAnswer::getBlockOrderIndex, Comparator.nullsLast(Integer::compareTo)))
+                .map(answer -> new AttemptReviewAnswerResponse(
+                        answer.getContentBlockId(),
+                        answer.getKindSnapshot(),
+                        answer.getBlockOrderIndex(),
+                        resolveMaxPoints(answer),
+                        answer.getPayloadSnapshot(),
+                        answer.getUserAnswer(),
+                        answer.getCorrect(),
+                        answer.getAwardedPoints(),
+                        answer.getGradingStatus(),
+                        answer.getGradingSource(),
+                        answer.getConfidence(),
+                        answer.getExplanation(),
+                        answer.getAiModel()))
                 .toList();
 
         return new AttemptReviewResponse(
                 result.getAttempt().getId(),
-                result.getAttempt().getAssessment().getId(),
-                result.getAttempt().getAssessment().getTitle(),
+                result.getAttempt().getContentId(),
                 result.getScore(),
                 result.getMaxScore(),
                 result.getCorrectAnswers(),
@@ -294,16 +285,14 @@ public class AttemptService {
 
     @Transactional(readOnly = true)
     public List<AttemptSummaryResponse> getMyAttempts(UUID userId) {
-        return attemptRepository.findAllByUserIdOrderByStartedAtDesc(userId)
-                .stream()
+        return attemptRepository.findAllByUserIdOrderByStartedAtDesc(userId).stream()
                 .map(this::toAttemptSummary)
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public List<AttemptSummaryResponse> getAllAttempts() {
-        return attemptRepository.findAll(Sort.by(Sort.Direction.DESC, "startedAt"))
-                .stream()
+        return attemptRepository.findAll(Sort.by(Sort.Direction.DESC, "startedAt")).stream()
                 .map(this::toAttemptSummary)
                 .toList();
     }
@@ -312,16 +301,13 @@ public class AttemptService {
         Attempt attempt = attemptRepository.findByIdForUpdate(attemptId)
                 .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
 
-        List<Question> activeQuestions = attempt.getAssessment().getQuestions().stream()
-                .filter(question -> Boolean.TRUE.equals(question.getActive()))
-                .toList();
-
         BigDecimal score = BigDecimal.ZERO;
         int correctAnswers = 0;
         int pendingManualReviews = 0;
 
         for (AttemptAnswer answer : attempt.getAnswers()) {
-            if (answer.getGradingStatus() == GradingStatus.MANUAL_REVIEW || answer.getGradingStatus() == GradingStatus.PENDING) {
+            if (answer.getGradingStatus() == GradingStatus.MANUAL_REVIEW
+                    || answer.getGradingStatus() == GradingStatus.PENDING) {
                 pendingManualReviews++;
                 continue;
             }
@@ -331,15 +317,16 @@ public class AttemptService {
             }
         }
 
-        AssessmentResult result = resolveOrCreateResult(attempt);
+        BigDecimal maxScore = attempt.getAnswers().stream()
+                .map(a -> BigDecimal.valueOf(resolveMaxPoints(a)))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        AssessmentResult result = resolveOrCreateResult(attempt);
         result.setScore(score);
-        result.setMaxScore(activeQuestions.stream()
-                .map(question -> BigDecimal.valueOf(question.getPoints()))
-                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        result.setMaxScore(maxScore);
         result.setCorrectAnswers(correctAnswers);
-        result.setTotalQuestions(activeQuestions.size());
-        result.setPassed(score.compareTo(BigDecimal.valueOf(attempt.getAssessment().getPassScore())) >= 0);
+        result.setTotalQuestions(attempt.getAnswers().size());
+        result.setPassed(computePassed(score, maxScore));
         result.setCompletedAt(Instant.now());
         result.setResultStatus(pendingManualReviews > 0 ? ResultStatus.PROVISIONAL : ResultStatus.FINAL);
 
@@ -348,16 +335,6 @@ public class AttemptService {
         } else {
             attempt.setStatus(AttemptStatus.FINALIZED);
             attempt.setSubmittedAt(result.getCompletedAt());
-            learningProgressGateway.publishAssessmentResult(new LearningProgressSyncRequest(
-                    attempt.getUserId(),
-                    attempt.getCourseId(),
-                    attempt.getSectionId(),
-                    attempt.getAssessment().getId(),
-                    attempt.getId(),
-                    result.getScore(),
-                    result.getPassed(),
-                    result.getResultStatus().name(),
-                    result.getCompletedAt()));
         }
 
         attemptRepository.save(attempt);
@@ -365,25 +342,46 @@ public class AttemptService {
         return toResultResponse(result);
     }
 
+    private ContentBlockSnapshot snapshotFromAnswer(Attempt attempt, AttemptAnswer answer) {
+        return new ContentBlockSnapshot(
+                answer.getContentBlockId(),
+                attempt.getContentId(),
+                answer.getKindSnapshot(),
+                answer.getPayloadSnapshot(),
+                answer.getMaxScoreSnapshot(),
+                answer.getBlockOrderIndex(),
+                Boolean.TRUE);
+    }
+
+    private int resolveMaxPoints(AttemptAnswer answer) {
+        return answer.getMaxScoreSnapshot() == null || answer.getMaxScoreSnapshot() < 1
+                ? 1
+                : answer.getMaxScoreSnapshot();
+    }
+
+    private boolean computePassed(BigDecimal score, BigDecimal maxScore) {
+        if (maxScore == null || maxScore.signum() <= 0) {
+            return Boolean.TRUE;
+        }
+        BigDecimal threshold = maxScore.multiply(PASS_RATIO).setScale(2, RoundingMode.HALF_UP);
+        return score.compareTo(threshold) >= 0;
+    }
+
     private Attempt findOwnedAttempt(UUID attemptId, UUID userId) {
         Attempt attempt = attemptRepository.findById(attemptId)
                 .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
-
         if (!attempt.getUserId().equals(userId)) {
             throw new NotFoundException(1404, "Attempt not found for current user.");
         }
-
         return attempt;
     }
 
     private Attempt findOwnedAttemptForUpdate(UUID attemptId, UUID userId) {
         Attempt attempt = attemptRepository.findByIdForUpdate(attemptId)
                 .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
-
         if (!attempt.getUserId().equals(userId)) {
             throw new NotFoundException(1404, "Attempt not found for current user.");
         }
-
         return attempt;
     }
 
@@ -392,7 +390,8 @@ public class AttemptService {
         if (result != null) {
             return result;
         }
-        return assessmentResultRepository.findByAttempt_Id(attempt.getId())
+        return assessmentResultRepository
+                .findByAttempt_Id(attempt.getId())
                 .map(existing -> {
                     attempt.setResult(existing);
                     return existing;
@@ -409,7 +408,8 @@ public class AttemptService {
         try {
             return assessmentResultRepository.saveAndFlush(candidate);
         } catch (DataIntegrityViolationException ex) {
-            AssessmentResult existing = assessmentResultRepository.findByAttempt_Id(attempt.getId())
+            AssessmentResult existing = assessmentResultRepository
+                    .findByAttempt_Id(attempt.getId())
                     .orElseThrow(() -> ex);
             existing.setScore(candidate.getScore());
             existing.setMaxScore(candidate.getMaxScore());
@@ -429,40 +429,10 @@ public class AttemptService {
         }
     }
 
-    private void ensureWithinTimeLimit(Attempt attempt) {
-        Integer limit = attempt.getAssessment().getTimeLimitMinutes();
-        if (limit == null || limit <= 0) {
-            return;
+    private void ensureTimeRemaining(Attempt attempt) {
+        if (attempt.getRemainingSeconds() != null && attempt.getRemainingSeconds() <= 0) {
+            throw new ConflictException(1409, "Time has expired for this attempt.");
         }
-        Instant deadline = attempt.getStartedAt().plus(limit, ChronoUnit.MINUTES);
-        if (Instant.now().isAfter(deadline)) {
-            throw new ConflictException(1409, "Time limit for this attempt has expired.");
-        }
-    }
-
-    private AttemptStartResponse toStartResponse(Attempt attempt) {
-        return new AttemptStartResponse(
-                attempt.getId(),
-                attempt.getAssessment().getId(),
-                attempt.getAssessment().getTitle(),
-                attempt.getStatus(),
-                attempt.getStartedAt(),
-                attempt.getAssessment().getQuestions().stream()
-                        .filter(question -> Boolean.TRUE.equals(question.getActive()))
-                        .sorted(Comparator.comparing(Question::getDisplayOrder))
-                        .map(this::toAttemptQuestionResponse)
-                        .toList());
-    }
-
-    private AttemptQuestionResponse toAttemptQuestionResponse(Question question) {
-        return new AttemptQuestionResponse(
-                question.getId(),
-                question.getContent(),
-                question.getType(),
-                question.getDisplayOrder(),
-                question.getPoints(),
-                question.getPayload(),
-                question.getVersion());
     }
 
     private AttemptResultResponse toResultResponse(AssessmentResult result) {
@@ -471,7 +441,7 @@ public class AttemptService {
                 .count();
         return new AttemptResultResponse(
                 result.getAttempt().getId(),
-                result.getAttempt().getAssessment().getId(),
+                result.getAttempt().getContentId(),
                 result.getScore(),
                 result.getMaxScore(),
                 result.getCorrectAnswers(),
@@ -487,12 +457,35 @@ public class AttemptService {
         AssessmentResult result = attempt.getResult();
         return new AttemptSummaryResponse(
                 attempt.getId(),
-                attempt.getAssessment().getId(),
-                attempt.getAssessment().getTitle(),
+                attempt.getContentId(),
                 attempt.getStatus(),
                 attempt.getStartedAt(),
                 attempt.getSubmittedAt(),
                 result == null ? BigDecimal.ZERO : result.getScore(),
                 result != null && Boolean.TRUE.equals(result.getPassed()));
+    }
+
+    private String extractPrompt(String payload, String kind) {
+        if (payload == null || payload.isBlank()) {
+            return "";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(payload);
+            if ("QUIZ_MCQ".equals(kind)) {
+                return root.path("question").asText("");
+            }
+            if ("SHORT_ANSWER".equals(kind)) {
+                return root.path("prompt").asText("");
+            }
+            if ("MATCHING".equals(kind) || "ORDERING".equals(kind) || "FILL_IN_THE_BLANKS".equals(kind)) {
+                String p = root.path("prompt").asText("");
+                if (!p.isBlank()) {
+                    return p;
+                }
+            }
+            return root.path("prompt").asText(root.path("question").asText(""));
+        } catch (Exception ex) {
+            return "";
+        }
     }
 }

@@ -2,11 +2,16 @@ package com.medicology.assessment.controller;
 
 import com.medicology.assessment.dto.common.ApiResponse;
 import com.medicology.assessment.dto.request.AttemptAnswerRequest;
+import com.medicology.assessment.dto.request.AttemptStartRequest;
+import com.medicology.assessment.dto.request.AttemptTickRequest;
+import com.medicology.assessment.dto.response.AttemptAnswerLookupResponse;
 import com.medicology.assessment.dto.response.AttemptAnswerResponse;
-import com.medicology.assessment.dto.response.AttemptReviewResponse;
+import com.medicology.assessment.dto.response.AttemptInProgressItemResponse;
 import com.medicology.assessment.dto.response.AttemptResultResponse;
+import com.medicology.assessment.dto.response.AttemptReviewResponse;
 import com.medicology.assessment.dto.response.AttemptStartResponse;
 import com.medicology.assessment.dto.response.AttemptSummaryResponse;
+import com.medicology.assessment.dto.response.AttemptTickResponse;
 import com.medicology.assessment.service.AttemptService;
 import com.medicology.assessment.utils.SecurityUtils;
 import com.medicology.assessment.wrapper.UserPrincipal;
@@ -30,15 +35,16 @@ public class AttemptController {
 
     private final AttemptService attemptService;
 
-    @PostMapping("/api/v1/assessments/{assessmentId}/attempts")
+    @PostMapping("/api/v1/contents/{contentId}/attempts")
     public ResponseEntity<ApiResponse<AttemptStartResponse>> startAttempt(
-            @PathVariable UUID assessmentId,
+            @PathVariable UUID contentId,
+            @RequestBody(required = false) AttemptStartRequest request,
             @AuthenticationPrincipal UserPrincipal principal) {
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(
                         "Attempt started successfully.",
-                        attemptService.startAttempt(assessmentId, SecurityUtils.requireUserId(principal))));
+                        attemptService.startAttempt(contentId, SecurityUtils.requireUserId(principal), request)));
     }
 
     @PostMapping("/api/v1/attempts/{attemptId}/answers")
@@ -52,10 +58,40 @@ public class AttemptController {
                 attemptService.saveAnswer(attemptId, SecurityUtils.requireUserId(principal), request)));
     }
 
+    @GetMapping("/api/v1/attempts/{attemptId}/blocks/{contentBlockId}/answer")
+    public ResponseEntity<ApiResponse<AttemptAnswerLookupResponse>> getAnswer(
+            @PathVariable UUID attemptId,
+            @PathVariable UUID contentBlockId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Answer retrieved successfully.",
+                attemptService.getAnswer(attemptId, contentBlockId, SecurityUtils.requireUserId(principal))));
+    }
+
+    @PostMapping("/api/v1/attempts/{attemptId}/tick")
+    public ResponseEntity<ApiResponse<AttemptTickResponse>> tickAttempt(
+            @PathVariable UUID attemptId,
+            @RequestBody(required = false) AttemptTickRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Attempt time updated.",
+                attemptService.tickRemaining(attemptId, SecurityUtils.requireUserId(principal), request)));
+    }
+
+    @GetMapping("/api/v1/users/me/in-progress-attempts")
+    public ResponseEntity<ApiResponse<List<AttemptInProgressItemResponse>>> getMyInProgressAttempts(
+            @AuthenticationPrincipal UserPrincipal principal) {
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "In-progress attempts retrieved successfully.",
+                attemptService.getInProgressAttempts(SecurityUtils.requireUserId(principal))));
+    }
+
     @PostMapping("/api/v1/attempts/{attemptId}/submit")
     public ResponseEntity<ApiResponse<AttemptResultResponse>> submitAttempt(
-            @PathVariable UUID attemptId,
-            @AuthenticationPrincipal UserPrincipal principal) {
+            @PathVariable UUID attemptId, @AuthenticationPrincipal UserPrincipal principal) {
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Attempt submitted successfully.",
@@ -64,8 +100,7 @@ public class AttemptController {
 
     @GetMapping("/api/v1/attempts/{attemptId}/result")
     public ResponseEntity<ApiResponse<AttemptResultResponse>> getResult(
-            @PathVariable UUID attemptId,
-            @AuthenticationPrincipal UserPrincipal principal) {
+            @PathVariable UUID attemptId, @AuthenticationPrincipal UserPrincipal principal) {
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Attempt result retrieved successfully.",
@@ -74,8 +109,7 @@ public class AttemptController {
 
     @GetMapping("/api/v1/attempts/{attemptId}/review")
     public ResponseEntity<ApiResponse<AttemptReviewResponse>> getReview(
-            @PathVariable UUID attemptId,
-            @AuthenticationPrincipal UserPrincipal principal) {
+            @PathVariable UUID attemptId, @AuthenticationPrincipal UserPrincipal principal) {
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Attempt review retrieved successfully.",

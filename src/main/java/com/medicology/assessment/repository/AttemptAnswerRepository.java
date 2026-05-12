@@ -9,7 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface AttemptAnswerRepository extends JpaRepository<AttemptAnswer, UUID> {
 
-    Optional<AttemptAnswer> findByAttempt_IdAndQuestion_Id(UUID attemptId, UUID questionId);
+    Optional<AttemptAnswer> findByAttempt_IdAndContentBlockId(UUID attemptId, UUID contentBlockId);
 
     List<AttemptAnswer> findAllByGradingStatusOrderByAnsweredAtAsc(GradingStatus gradingStatus);
 }

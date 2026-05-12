@@ -24,7 +24,9 @@ import lombok.Setter;
 @Entity
 @Table(
         name = "attempt_answers",
-        uniqueConstraints = @UniqueConstraint(name = "uk_attempt_question", columnNames = {"attempt_id", "question_id"}))
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_attempt_content_block",
+                columnNames = {"attempt_id", "content_block_id"}))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -38,24 +40,26 @@ public class AttemptAnswer {
     @JoinColumn(name = "attempt_id", nullable = false)
     private Attempt attempt;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "question_id", nullable = false)
-    private Question question;
+    @Column(name = "content_block_id", nullable = false)
+    private UUID contentBlockId;
+
+    @Column(name = "kind_snapshot", nullable = false, length = 50)
+    private String kindSnapshot;
+
+    @Column(name = "block_order_index")
+    private Integer blockOrderIndex;
+
+    @Column(name = "prompt_snapshot", columnDefinition = "TEXT")
+    private String promptSnapshot;
+
+    @Column(name = "max_score_snapshot")
+    private Integer maxScoreSnapshot;
 
     @Column(nullable = false, columnDefinition = "TEXT")
     private String userAnswer;
 
-    @Column(nullable = false)
-    private Integer questionVersion;
-
     @Column(nullable = false, columnDefinition = "TEXT")
     private String payloadSnapshot;
-
-    @Column(nullable = false, columnDefinition = "TEXT")
-    private String answerKeySnapshot;
-
-    @Column(columnDefinition = "TEXT")
-    private String optionContentSnapshot;
 
     @Column(nullable = false)
     private Boolean correct = Boolean.FALSE;

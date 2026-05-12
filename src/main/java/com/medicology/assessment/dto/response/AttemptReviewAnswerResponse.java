@@ -2,16 +2,14 @@ package com.medicology.assessment.dto.response;
 
 import com.medicology.assessment.entity.GradingSource;
 import com.medicology.assessment.entity.GradingStatus;
-import com.medicology.assessment.entity.QuestionType;
 import java.math.BigDecimal;
 import java.util.UUID;
 
 public record AttemptReviewAnswerResponse(
-        UUID questionId,
-        String questionContent,
-        QuestionType questionType,
-        Integer displayOrder,
-        Integer points,
+        UUID contentBlockId,
+        String blockKind,
+        Integer orderIndex,
+        Integer maxScore,
         String payload,
         String userAnswer,
         Boolean correct,
@@ -20,6 +18,4 @@ public record AttemptReviewAnswerResponse(
         GradingSource gradingSource,
         BigDecimal confidence,
         String explanation,
-        String aiModel
-) {
-}
+        String aiModel) {}

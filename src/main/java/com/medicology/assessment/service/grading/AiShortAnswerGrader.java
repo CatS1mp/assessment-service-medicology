@@ -5,8 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.medicology.assessment.config.AssessmentProperties;
 import com.medicology.assessment.entity.GradingSource;
 import com.medicology.assessment.entity.GradingStatus;
-import com.medicology.assessment.entity.Question;
 import com.medicology.assessment.service.grading.model.AiEvaluationResponse;
+import com.medicology.assessment.service.grading.model.ContentBlockSnapshot;
 import com.medicology.assessment.service.grading.model.GradingDecision;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -35,25 +35,21 @@ public class AiShortAnswerGrader {
     private final AssessmentProperties assessmentProperties;
     private final ObjectMapper objectMapper;
 
-    public GradingDecision grade(Question question, String userAnswer) {
+    public GradingDecision grade(ContentBlockSnapshot snapshot, String userAnswer) {
         log.info(
-                "ai_grading_started questionId={} type={} model={} answerLength={}",
-                question.getId(),
-                question.getType(),
+                "ai_grading_started blockId={} kind={} model={} answerLength={}",
+                snapshot.contentBlockId(),
+                snapshot.kind(),
                 assessmentProperties.getAiModel(),
                 userAnswer == null ? 0 : userAnswer.length());
-        AiEvaluationResponse aiResponse = evaluateWithProvider(question, userAnswer);
+        AiEvaluationResponse aiResponse = evaluateWithProvider(snapshot, userAnswer);
         BigDecimal confidenceThreshold = BigDecimal.valueOf(assessmentProperties.getAiConfidenceThreshold());
         BigDecimal confidence = aiResponse.confidence() == null ? BigDecimal.ZERO : aiResponse.confidence();
 
-        // Strict policy requested:
-        // - confidence <= 0.70 => auto incorrect (finalized)
-        // - 0.70 < confidence < threshold(0.80 default) => manual review
-        // - confidence >= threshold => finalize with AI verdict
         if (confidence.compareTo(AUTO_INCORRECT_MAX_CONFIDENCE) <= 0) {
             log.warn(
-                    "ai_grading_auto_incorrect questionId={} confidence={} reason={}",
-                    question.getId(),
+                    "ai_grading_auto_incorrect blockId={} confidence={} reason={}",
+                    snapshot.contentBlockId(),
                     confidence,
                     aiResponse.explanation());
             return new GradingDecision(
@@ -69,8 +65,8 @@ public class AiShortAnswerGrader {
 
         if (confidence.compareTo(confidenceThreshold) < 0) {
             log.warn(
-                    "ai_grading_manual_review questionId={} confidence={} threshold={} reason={}",
-                    question.getId(),
+                    "ai_grading_manual_review blockId={} confidence={} threshold={} reason={}",
+                    snapshot.contentBlockId(),
                     confidence,
                     confidenceThreshold,
                     aiResponse.explanation());
@@ -79,14 +75,10 @@ public class AiShortAnswerGrader {
         }
 
         boolean correct = aiResponse.correct();
-        log.info(
-                "ai_grading_finalized questionId={} confidence={} correct={}",
-                question.getId(),
-                confidence,
-                correct);
+        log.info("ai_grading_finalized blockId={} confidence={} correct={}", snapshot.contentBlockId(), confidence, correct);
         return new GradingDecision(
                 correct,
-                correct ? BigDecimal.valueOf(question.getPoints()) : BigDecimal.ZERO,
+                correct ? BigDecimal.valueOf(snapshot.resolvedMaxPoints()) : BigDecimal.ZERO,
                 GradingStatus.FINALIZED,
                 GradingSource.AI,
                 confidence,
@@ -95,7 +87,7 @@ public class AiShortAnswerGrader {
                 Instant.now());
     }
 
-    private AiEvaluationResponse evaluateWithProvider(Question question, String userAnswer) {
+    private AiEvaluationResponse evaluateWithProvider(ContentBlockSnapshot snapshot, String userAnswer) {
         String apiKey = assessmentProperties.getAiApiKey();
         if (apiKey == null || apiKey.isBlank()) {
             log.error("ai_grading_provider_unavailable reason=missing_api_key provider={}", assessmentProperties.getAiProvider());
@@ -107,7 +99,7 @@ public class AiShortAnswerGrader {
 
         try {
             String endpoint = resolveEndpoint(assessmentProperties.getAiModel());
-            String prompt = buildPrompt(question, userAnswer);
+            String prompt = buildPrompt(snapshot, userAnswer);
 
             List<Map<String, Object>> tools = new ArrayList<>();
             if (assessmentProperties.isAiGroundingEnabled()) {
@@ -137,8 +129,8 @@ public class AiShortAnswerGrader {
 
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 log.error(
-                        "ai_grading_provider_error questionId={} status={} body={}",
-                        question.getId(),
+                        "ai_grading_provider_error blockId={} status={} body={}",
+                        snapshot.contentBlockId(),
                         response.statusCode(),
                         truncate(response.body(), 500));
                 return new AiEvaluationResponse(
@@ -156,7 +148,7 @@ public class AiShortAnswerGrader {
                     .path("text")
                     .asText("");
             if (aiJsonText.isBlank()) {
-                log.error("ai_grading_provider_empty_response questionId={}", question.getId());
+                log.error("ai_grading_provider_empty_response blockId={}", snapshot.contentBlockId());
                 return new AiEvaluationResponse(false, BigDecimal.ZERO, "AI provider returned empty content.");
             }
 
@@ -172,20 +164,20 @@ public class AiShortAnswerGrader {
             if (!correct && !suggestions.isEmpty()) {
                 explanation = explanation + " Suggested answers: " + String.join("; ", suggestions) + ".";
             } else if (!correct) {
-                String fallback = extractExpectedReference(question.getAnswerKey());
+                String fallback = extractExpectedReference(snapshot.payload());
                 if (!fallback.isBlank()) {
                     explanation = explanation + " Suggested answers: " + fallback + ".";
                 }
             }
             explanation = sanitizeExplanation(explanation);
             log.debug(
-                    "ai_grading_provider_success questionId={} confidence={} correct={}",
-                    question.getId(),
+                    "ai_grading_provider_success blockId={} confidence={} correct={}",
+                    snapshot.contentBlockId(),
                     confidence,
                     correct);
             return new AiEvaluationResponse(correct, confidence, explanation);
         } catch (Exception ex) {
-            log.error("ai_grading_provider_exception questionId={} message={}", question.getId(), ex.getMessage(), ex);
+            log.error("ai_grading_provider_exception blockId={} message={}", snapshot.contentBlockId(), ex.getMessage(), ex);
             return new AiEvaluationResponse(
                     false,
                     BigDecimal.ZERO,
@@ -206,8 +198,9 @@ public class AiShortAnswerGrader {
         return endpoint + delimiter + "key=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8);
     }
 
-    private String buildPrompt(Question question, String userAnswer) {
-        String answerReference = extractExpectedReference(question.getAnswerKey());
+    private String buildPrompt(ContentBlockSnapshot snapshot, String userAnswer) {
+        String answerReference = extractExpectedReference(snapshot.payload());
+        String questionText = extractQuestionText(snapshot.payload());
         return """
         You are a practical short-answer medical grader.
         You must evaluate semantic correctness against BOTH:
@@ -256,7 +249,23 @@ public class AiShortAnswerGrader {
 
         Learner answer:
         %s
-        """.formatted(question.getContent(), answerReference, userAnswer == null ? "" : userAnswer);
+        """
+                .formatted(questionText, answerReference, userAnswer == null ? "" : userAnswer);
+    }
+
+    private String extractQuestionText(String payload) {
+        try {
+            JsonNode root = objectMapper.readTree(payload);
+            if (root.has("prompt")) {
+                return root.path("prompt").asText("");
+            }
+            if (root.has("question")) {
+                return root.path("question").asText("");
+            }
+            return root.toString();
+        } catch (Exception ex) {
+            return payload;
+        }
     }
 
     private BigDecimal parseConfidence(JsonNode confidenceNode) {
@@ -295,13 +304,15 @@ public class AiShortAnswerGrader {
         if (explanation == null || explanation.isBlank()) {
             return "AI did not provide a detailed explanation.";
         }
-        // Do not surface confidence percentages in learner-facing explanation.
         return explanation.replaceAll("(?i)confidence\\s*[:=]?\\s*\\d+(?:\\.\\d+)?%?", "").trim();
     }
 
-    private String extractExpectedReference(String answerKey) {
+    private String extractExpectedReference(String payload) {
         try {
-            JsonNode answerKeyNode = objectMapper.readTree(answerKey);
+            JsonNode answerKeyNode = objectMapper.readTree(payload);
+            if (answerKeyNode.has("sampleAnswer")) {
+                return answerKeyNode.path("sampleAnswer").asText("");
+            }
             if (answerKeyNode.has("reference")) {
                 return answerKeyNode.path("reference").asText("");
             }
@@ -313,7 +324,7 @@ public class AiShortAnswerGrader {
             }
             return answerKeyNode.toString();
         } catch (Exception ex) {
-            return answerKey;
+            return payload;
         }
     }
 
@@ -326,5 +337,4 @@ public class AiShortAnswerGrader {
         }
         return value.substring(0, maxLength) + "...";
     }
-
 }

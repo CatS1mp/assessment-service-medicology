@@ -26,20 +26,23 @@ public class ManualReviewService {
 
     @Transactional(readOnly = true)
     public List<ManualReviewItemResponse> listQueue() {
-        return attemptAnswerRepository.findAllByGradingStatusOrderByAnsweredAtAsc(GradingStatus.MANUAL_REVIEW)
-                .stream()
+        return attemptAnswerRepository.findAllByGradingStatusOrderByAnsweredAtAsc(GradingStatus.MANUAL_REVIEW).stream()
                 .map(this::toQueueItem)
                 .toList();
     }
 
     public void finalizeReview(UUID attemptAnswerId, UUID reviewerId, ManualReviewFinalizeRequest request) {
-        AttemptAnswer answer = attemptAnswerRepository.findById(attemptAnswerId)
+        AttemptAnswer answer = attemptAnswerRepository
+                .findById(attemptAnswerId)
                 .orElseThrow(() -> new NotFoundException(1404, "Attempt answer not found: " + attemptAnswerId));
 
         boolean correct = Boolean.TRUE.equals(request.correct());
         BigDecimal awardedPoints = request.awardedPoints();
         if (awardedPoints == null) {
-            awardedPoints = correct ? BigDecimal.valueOf(answer.getQuestion().getPoints()) : BigDecimal.ZERO;
+            int max = answer.getMaxScoreSnapshot() == null || answer.getMaxScoreSnapshot() < 1
+                    ? 1
+                    : answer.getMaxScoreSnapshot();
+            awardedPoints = correct ? BigDecimal.valueOf(max) : BigDecimal.ZERO;
         }
 
         answer.setCorrect(correct);
@@ -60,11 +63,11 @@ public class ManualReviewService {
         return new ManualReviewItemResponse(
                 answer.getId(),
                 answer.getAttempt().getId(),
-                answer.getQuestion().getId(),
-                answer.getQuestion().getContent(),
+                answer.getContentBlockId(),
+                answer.getKindSnapshot(),
+                answer.getPromptSnapshot(),
                 answer.getUserAnswer(),
                 answer.getPayloadSnapshot(),
-                answer.getAnswerKeySnapshot(),
                 answer.getConfidence(),
                 answer.getExplanation(),
                 answer.getAnsweredAt());

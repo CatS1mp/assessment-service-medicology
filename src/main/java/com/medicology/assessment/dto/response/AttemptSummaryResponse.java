@@ -7,12 +7,9 @@ import java.util.UUID;
 
 public record AttemptSummaryResponse(
         UUID attemptId,
-        UUID assessmentId,
-        String assessmentTitle,
+        UUID contentId,
         AttemptStatus status,
         Instant startedAt,
         Instant submittedAt,
         BigDecimal score,
-        Boolean passed
-) {
-}
+        Boolean passed) {}
