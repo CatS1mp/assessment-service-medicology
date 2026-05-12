@@ -6,8 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.medicology.assessment.config.AssessmentProperties;
 import com.medicology.assessment.entity.GradingSource;
 import com.medicology.assessment.entity.GradingStatus;
-import com.medicology.assessment.entity.Question;
-import com.medicology.assessment.entity.QuestionType;
+import com.medicology.assessment.service.grading.model.ContentBlockSnapshot;
 import com.medicology.assessment.service.grading.model.GradingDecision;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -16,6 +15,7 @@ import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,17 +32,18 @@ class AiShortAnswerGraderTest {
     }
 
     @Test
-    void grade_returnsManualReviewWhenApiKeyMissing() {
+    void grade_returnsFinalizedWhenApiKeyMissing() {
         AssessmentProperties properties = new AssessmentProperties();
         properties.setAiModel("gemini-2.5-flash");
         properties.setAiApiKey("");
         properties.setAiConfidenceThreshold(0.8d);
 
         AiShortAnswerGrader grader = new AiShortAnswerGrader(properties, objectMapper);
-        GradingDecision decision = grader.grade(buildQuestion(), "Sample learner answer");
+        GradingDecision decision = grader.grade(buildSnapshot(), "Sample learner answer");
 
-        assertThat(decision.gradingStatus()).isEqualTo(GradingStatus.MANUAL_REVIEW);
-        assertThat(decision.gradingSource()).isNull();
+        assertThat(decision.gradingStatus()).isEqualTo(GradingStatus.FINALIZED);
+        assertThat(decision.gradingSource()).isEqualTo(GradingSource.AI);
+        assertThat(decision.correct()).isFalse();
     }
 
     @Test
@@ -70,7 +71,7 @@ class AiShortAnswerGraderTest {
         properties.setAiConfidenceThreshold(0.8d);
 
         AiShortAnswerGrader grader = new AiShortAnswerGrader(properties, objectMapper);
-        GradingDecision decision = grader.grade(buildQuestion(), "Learner answer");
+        GradingDecision decision = grader.grade(buildSnapshot(), "Learner answer");
 
         assertThat(decision.gradingStatus()).isEqualTo(GradingStatus.FINALIZED);
         assertThat(decision.gradingSource()).isEqualTo(GradingSource.AI);
@@ -79,7 +80,7 @@ class AiShortAnswerGraderTest {
     }
 
     @Test
-    void grade_returnsManualReviewWhenProviderConfidenceTooLow() throws Exception {
+    void grade_returnsManualReviewWhenProviderConfidenceInReviewBand() throws Exception {
         startMockServer("""
                 {
                   "candidates": [
@@ -87,7 +88,7 @@ class AiShortAnswerGraderTest {
                       "content": {
                         "parts": [
                           {
-                            "text": "{\\"correct\\":false,\\"confidence\\":0.42,\\"explanation\\":\\"Unclear answer\\",\\"suggestedCorrectAnswers\\":[\\"...\\"]}"
+                            "text": "{\\"correct\\":false,\\"confidence\\":0.75,\\"explanation\\":\\"Unclear answer\\",\\"suggestedCorrectAnswers\\":[\\"...\\"]}"
                           }
                         ]
                       }
@@ -103,19 +104,21 @@ class AiShortAnswerGraderTest {
         properties.setAiConfidenceThreshold(0.8d);
 
         AiShortAnswerGrader grader = new AiShortAnswerGrader(properties, objectMapper);
-        GradingDecision decision = grader.grade(buildQuestion(), "Learner answer");
+        GradingDecision decision = grader.grade(buildSnapshot(), "Learner answer");
 
         assertThat(decision.gradingStatus()).isEqualTo(GradingStatus.MANUAL_REVIEW);
         assertThat(decision.gradingSource()).isNull();
     }
 
-    private Question buildQuestion() {
-        Question question = new Question();
-        question.setType(QuestionType.SHORT_ANSWER);
-        question.setPoints(5);
-        question.setContent("Explain why airway assessment is important.");
-        question.setAnswerKey("{\"reference\":\"Airway assessment ensures oxygen can reach lungs.\"}");
-        return question;
+    private ContentBlockSnapshot buildSnapshot() {
+        return new ContentBlockSnapshot(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "SHORT_ANSWER",
+                "{\"prompt\":\"Explain why airway assessment is important.\",\"sampleAnswer\":\"Airway assessment ensures oxygen can reach lungs.\"}",
+                5,
+                1,
+                true);
     }
 
     private void startMockServer(String responseBody) throws IOException {
