@@ -14,7 +14,7 @@
     <groupId>com</groupId>
     <artifactId>assessment-service-medicology</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>Medicology Assessment Service</name>
+    <name>Medicology&apos;s Assessment Service</name>
     <description>Spring Boot assessment service for Medicology</description>
 
     <properties>
