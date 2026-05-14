@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 public record AiEvaluationResponse(
         boolean correct,
         BigDecimal confidence,
-        String explanation
+        String explanation,
+        Integer awardedPoints
 ) {
 }

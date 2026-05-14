@@ -45,6 +45,7 @@ public class AiShortAnswerGrader {
         AiEvaluationResponse aiResponse = evaluateWithProvider(snapshot, userAnswer);
         BigDecimal confidenceThreshold = BigDecimal.valueOf(assessmentProperties.getAiConfidenceThreshold());
         BigDecimal confidence = aiResponse.confidence() == null ? BigDecimal.ZERO : aiResponse.confidence();
+        int maxPoints = snapshot.resolvedMaxPoints();
 
         if (confidence.compareTo(AUTO_INCORRECT_MAX_CONFIDENCE) <= 0) {
             log.warn(
@@ -75,10 +76,11 @@ public class AiShortAnswerGrader {
         }
 
         boolean correct = aiResponse.correct();
+        int awardedPoints = resolveAwardedPoints(aiResponse.awardedPoints(), correct, maxPoints);
         log.info("ai_grading_finalized blockId={} confidence={} correct={}", snapshot.contentBlockId(), confidence, correct);
         return new GradingDecision(
                 correct,
-                correct ? BigDecimal.valueOf(snapshot.resolvedMaxPoints()) : BigDecimal.ZERO,
+                BigDecimal.valueOf(awardedPoints),
                 GradingStatus.FINALIZED,
                 GradingSource.AI,
                 confidence,
@@ -94,7 +96,8 @@ public class AiShortAnswerGrader {
             return new AiEvaluationResponse(
                     false,
                     BigDecimal.ZERO,
-                    "AI API key is not configured.");
+                    "AI API key is not configured.",
+                    null);
         }
 
         try {
@@ -136,7 +139,8 @@ public class AiShortAnswerGrader {
                 return new AiEvaluationResponse(
                         false,
                         BigDecimal.ZERO,
-                        "AI provider returned non-success status: " + response.statusCode());
+                        "AI provider returned non-success status: " + response.statusCode(),
+                        null);
             }
 
             JsonNode providerRoot = objectMapper.readTree(response.body());
@@ -149,13 +153,14 @@ public class AiShortAnswerGrader {
                     .asText("");
             if (aiJsonText.isBlank()) {
                 log.error("ai_grading_provider_empty_response blockId={}", snapshot.contentBlockId());
-                return new AiEvaluationResponse(false, BigDecimal.ZERO, "AI provider returned empty content.");
+                return new AiEvaluationResponse(false, BigDecimal.ZERO, "AI provider returned empty content.", null);
             }
 
             JsonNode aiJson = objectMapper.readTree(aiJsonText);
             boolean correct = aiJson.path("correct").asBoolean(false);
             BigDecimal confidence = parseConfidence(aiJson.path("confidence"));
             String explanation = aiJson.path("explanation").asText("AI explanation is unavailable.");
+            Integer awardedPoints = parseAwardedPoints(aiJson.path("awardedPoints"));
             List<String> suggestions = parseSuggestions(aiJson.path("suggestedCorrectAnswers"));
             String reason = aiJson.path("reason").asText("").trim();
             if (!reason.isBlank()) {
@@ -175,13 +180,14 @@ public class AiShortAnswerGrader {
                     snapshot.contentBlockId(),
                     confidence,
                     correct);
-            return new AiEvaluationResponse(correct, confidence, explanation);
+            return new AiEvaluationResponse(correct, confidence, explanation, awardedPoints);
         } catch (Exception ex) {
             log.error("ai_grading_provider_exception blockId={} message={}", snapshot.contentBlockId(), ex.getMessage(), ex);
             return new AiEvaluationResponse(
                     false,
                     BigDecimal.ZERO,
-                    "AI evaluation failed: " + ex.getMessage());
+                    "AI evaluation failed: " + ex.getMessage(),
+                    null);
         }
     }
 
@@ -218,6 +224,7 @@ public class AiShortAnswerGrader {
         {
         "correct": boolean,
         "confidence": number,
+        "awardedPoints": integer,
         "reason": string,
         "explanation": string,
         "suggestedCorrectAnswers": string[],
@@ -226,6 +233,10 @@ public class AiShortAnswerGrader {
 
         Hard rules:
         - confidence must be in [0.0, 1.0]
+        - awardedPoints must be an integer in [0, %d]
+        - if fully correct: correct=true and awardedPoints=%d
+        - if partially correct but missing key points: %s
+        - if incorrect/off-topic/unsafe: correct=false and awardedPoints=0
         - confidence should reflect semantic certainty, not exact keyword overlap
         - NEVER mention confidence value in reason/explanation text
         - reason must explicitly state why learner answer is wrong or right in one sentence
@@ -250,7 +261,13 @@ public class AiShortAnswerGrader {
         Learner answer:
         %s
         """
-                .formatted(questionText, answerReference, userAnswer == null ? "" : userAnswer);
+                .formatted(
+                        maxPointsForPrompt(snapshot),
+                        maxPointsForPrompt(snapshot),
+                        partialRuleForPrompt(snapshot),
+                        questionText,
+                        answerReference,
+                        userAnswer == null ? "" : userAnswer);
     }
 
     private String extractQuestionText(String payload) {
@@ -286,6 +303,24 @@ public class AiShortAnswerGrader {
         }
     }
 
+    private Integer parseAwardedPoints(JsonNode awardedPointsNode) {
+        if (awardedPointsNode == null || awardedPointsNode.isMissingNode() || awardedPointsNode.isNull()) {
+            return null;
+        }
+        try {
+            if (awardedPointsNode.isNumber()) {
+                return awardedPointsNode.asInt();
+            }
+            String raw = awardedPointsNode.asText("").trim();
+            if (raw.isBlank()) {
+                return null;
+            }
+            return Integer.parseInt(raw);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
     private List<String> parseSuggestions(JsonNode node) {
         if (node == null || node.isMissingNode() || !node.isArray()) {
             return List.of();
@@ -305,6 +340,30 @@ public class AiShortAnswerGrader {
             return "AI did not provide a detailed explanation.";
         }
         return explanation.replaceAll("(?i)confidence\\s*[:=]?\\s*\\d+(?:\\.\\d+)?%?", "").trim();
+    }
+
+    private int resolveAwardedPoints(Integer suggestedPoints, boolean correct, int maxPoints) {
+        if (correct) {
+            return maxPoints;
+        }
+        int fallback = 0;
+        if (suggestedPoints == null) {
+            return fallback;
+        }
+        int normalized = Math.max(0, Math.min(maxPoints, suggestedPoints));
+        return normalized;
+    }
+
+    private int maxPointsForPrompt(ContentBlockSnapshot snapshot) {
+        return Math.max(1, snapshot.resolvedMaxPoints());
+    }
+
+    private String partialRuleForPrompt(ContentBlockSnapshot snapshot) {
+        int maxPoints = maxPointsForPrompt(snapshot);
+        if (maxPoints <= 1) {
+            return "use awardedPoints=0 unless fully correct.";
+        }
+        return "correct=false and awardedPoints in [1, " + (maxPoints - 1) + "]";
     }
 
     private String extractExpectedReference(String payload) {

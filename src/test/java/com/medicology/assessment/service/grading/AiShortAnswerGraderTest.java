@@ -55,7 +55,7 @@ class AiShortAnswerGraderTest {
                       "content": {
                         "parts": [
                           {
-                            "text": "{\\"correct\\":true,\\"confidence\\":0.91,\\"explanation\\":\\"Good reasoning\\",\\"suggestedCorrectAnswers\\":[]}"
+                            "text": "{\\"correct\\":true,\\"confidence\\":0.91,\\"awardedPoints\\":4,\\"explanation\\":\\"Good reasoning\\",\\"suggestedCorrectAnswers\\":[]}"
                           }
                         ]
                       }
@@ -77,6 +77,7 @@ class AiShortAnswerGraderTest {
         assertThat(decision.gradingSource()).isEqualTo(GradingSource.AI);
         assertThat(decision.correct()).isTrue();
         assertThat(decision.confidence()).isEqualByComparingTo(new BigDecimal("0.91"));
+        assertThat(decision.awardedPoints()).isEqualByComparingTo(new BigDecimal("5"));
     }
 
     @Test
@@ -108,6 +109,39 @@ class AiShortAnswerGraderTest {
 
         assertThat(decision.gradingStatus()).isEqualTo(GradingStatus.MANUAL_REVIEW);
         assertThat(decision.gradingSource()).isNull();
+    }
+
+    @Test
+    void grade_returnsPartialIntegerPointsWhenConfidenceHighAndAnswerIsIncomplete() throws Exception {
+        startMockServer("""
+                {
+                  "candidates": [
+                    {
+                      "content": {
+                        "parts": [
+                          {
+                            "text": "{\\"correct\\":false,\\"confidence\\":0.92,\\"awardedPoints\\":3,\\"explanation\\":\\"Missing one key concept\\",\\"suggestedCorrectAnswers\\":[\\"Core concept A\\",\\"Core concept B\\"]}"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """);
+
+        AssessmentProperties properties = new AssessmentProperties();
+        properties.setAiModel("gemini-2.5-flash");
+        properties.setAiApiKey("demo-key");
+        properties.setAiEndpoint("http://localhost:" + server.getAddress().getPort() + "/ai-eval");
+        properties.setAiConfidenceThreshold(0.8d);
+
+        AiShortAnswerGrader grader = new AiShortAnswerGrader(properties, objectMapper);
+        GradingDecision decision = grader.grade(buildSnapshot(), "Learner answer");
+
+        assertThat(decision.gradingStatus()).isEqualTo(GradingStatus.FINALIZED);
+        assertThat(decision.gradingSource()).isEqualTo(GradingSource.AI);
+        assertThat(decision.correct()).isFalse();
+        assertThat(decision.awardedPoints()).isEqualByComparingTo(new BigDecimal("3"));
     }
 
     private ContentBlockSnapshot buildSnapshot() {
