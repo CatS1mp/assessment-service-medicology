@@ -462,6 +462,7 @@ public class AttemptService {
                 attempt.getStartedAt(),
                 attempt.getSubmittedAt(),
                 result == null ? BigDecimal.ZERO : result.getScore(),
+                result == null ? null : result.getMaxScore(),
                 result != null && Boolean.TRUE.equals(result.getPassed()));
     }
 

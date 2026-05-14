@@ -12,4 +12,5 @@ public record AttemptSummaryResponse(
         Instant startedAt,
         Instant submittedAt,
         BigDecimal score,
+        BigDecimal maxScore,
         Boolean passed) {}
