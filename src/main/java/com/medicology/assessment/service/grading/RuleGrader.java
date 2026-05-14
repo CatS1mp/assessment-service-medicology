@@ -220,12 +220,7 @@ public class RuleGrader {
             }
             List<String> expected = new ArrayList<>();
             for (JsonNode item : items) {
-                String id = item.path("id").asText("");
-                if (id.isBlank()) {
-                    id = normalize(item.toString());
-                } else {
-                    id = normalize(id);
-                }
+                String id = resolveOrderingItemId(item);
                 if (!id.isEmpty()) {
                     expected.add(id);
                 }
@@ -235,6 +230,19 @@ public class RuleGrader {
         } catch (Exception ex) {
             return false;
         }
+    }
+
+    private String resolveOrderingItemId(JsonNode item) {
+        if (item == null || item.isNull() || item.isMissingNode()) {
+            return "";
+        }
+        if (item.isTextual() || item.isNumber() || item.isBoolean()) {
+            return normalize(item.asText(""));
+        }
+        if (!item.isObject()) {
+            return "";
+        }
+        return normalize(item.path("id").asText(""));
     }
 
     private List<String> parseOrderingSequence(String raw) {
