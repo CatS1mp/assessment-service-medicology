@@ -15,8 +15,9 @@ Configure these variables before enabling real provider calls:
 ## Current Behavior
 
 - `SHORT_ANSWER` uses `AiShortAnswerGrader`.
-- If confidence is below threshold, answer is set to `MANUAL_REVIEW`.
-- If confidence is at/above threshold, answer is `FINALIZED`.
+- If confidence is `<= 0.70`, answer is auto-finalized as incorrect with score `0`.
+- If confidence is in `(0.70, threshold)`, answer is set to `MANUAL_REVIEW`.
+- If confidence is `>= threshold`, answer is `FINALIZED` and can receive integer `awardedPoints` in `[0..maxScore]`.
 - Objective question types use `RuleGrader`.
 
 ## Prompt Rubric Template (for real provider implementation)
@@ -28,6 +29,7 @@ When you wire the real AI provider call, use a rubric-driven prompt:
 3. Ask model to return strict JSON:
    - `correct` (boolean)
    - `confidence` (0..1)
+   - `awardedPoints` (integer 0..maxScore for partial-credit)
    - `explanation` (string)
    - `suggestedCorrectAnswers` (array, only if incorrect; max 3)
 4. Reject non-JSON responses and fallback to `MANUAL_REVIEW`.
