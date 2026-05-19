@@ -17,4 +17,8 @@ public record AttemptResultResponse(
         Instant completedAt,
         ResultStatus resultStatus,
         AttemptStatus attemptStatus,
-        Integer pendingManualReviews) {}
+        Integer pendingManualReviews,
+        Integer scorePercent,
+        String displayOutcome,
+        String mascotKey,
+        BigDecimal passThresholdScore) {}

@@ -11,6 +11,7 @@ import com.medicology.assessment.dto.response.AttemptResultResponse;
 import com.medicology.assessment.dto.response.AttemptReviewResponse;
 import com.medicology.assessment.dto.response.AttemptStartResponse;
 import com.medicology.assessment.dto.response.AttemptSummaryResponse;
+import com.medicology.assessment.dto.response.LatestSubmittedAttemptResponse;
 import com.medicology.assessment.dto.response.AttemptTickResponse;
 import com.medicology.assessment.service.AttemptService;
 import com.medicology.assessment.utils.SecurityUtils;
@@ -114,6 +115,16 @@ public class AttemptController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Attempt review retrieved successfully.",
                 attemptService.getReview(attemptId, SecurityUtils.requireUserId(principal))));
+    }
+
+    @GetMapping("/api/v1/contents/{contentId}/attempts/latest-submitted")
+    public ResponseEntity<ApiResponse<LatestSubmittedAttemptResponse>> getLatestSubmittedAttempt(
+            @PathVariable UUID contentId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Latest submitted attempt retrieved successfully.",
+                attemptService.getLatestSubmittedAttempt(contentId, SecurityUtils.requireUserId(principal))));
     }
 
     @GetMapping("/api/v1/users/me/attempts")

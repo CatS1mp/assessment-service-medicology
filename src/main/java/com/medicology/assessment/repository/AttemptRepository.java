@@ -25,6 +25,9 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
     List<Attempt> findByUserIdAndStatus(UUID userId, AttemptStatus status);
 
+    java.util.Optional<Attempt> findTopByContentIdAndUserIdAndSubmittedAtIsNotNullOrderBySubmittedAtDesc(
+            UUID contentId, UUID userId);
+
     @Query(
             "select distinct a from Attempt a join fetch a.result r where a.userId = :userId and a.status = :status and r.resultStatus = :resultStatus")
     List<Attempt> findFinalizedCompletionsForUser(
