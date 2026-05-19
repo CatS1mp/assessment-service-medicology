@@ -2,6 +2,7 @@ package com.medicology.assessment.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.medicology.assessment.client.LearningStreakClient;
 import com.medicology.assessment.dto.request.AttemptAnswerRequest;
 import com.medicology.assessment.dto.request.AttemptStartRequest;
 import com.medicology.assessment.dto.request.AttemptTickRequest;
@@ -14,6 +15,7 @@ import com.medicology.assessment.dto.response.AttemptReviewResponse;
 import com.medicology.assessment.dto.response.AttemptStartResponse;
 import com.medicology.assessment.dto.response.AttemptSummaryResponse;
 import com.medicology.assessment.dto.response.AttemptTickResponse;
+import com.medicology.assessment.dto.response.LatestSubmittedAttemptResponse;
 import com.medicology.assessment.entity.AssessmentResult;
 import com.medicology.assessment.entity.Attempt;
 import com.medicology.assessment.entity.AttemptAnswer;
@@ -53,6 +55,7 @@ public class AttemptService {
     private final AssessmentResultRepository assessmentResultRepository;
     private final GradingEngine gradingEngine;
     private final ObjectMapper objectMapper;
+    private final LearningStreakClient learningStreakClient;
 
     public AttemptStartResponse startAttempt(UUID contentId, UUID userId, AttemptStartRequest request) {
         return attemptRepository
@@ -80,10 +83,10 @@ public class AttemptService {
         ensureTimeRemaining(attempt);
 
         if (!request.contentId().equals(attempt.getContentId())) {
-            throw new ConflictException(1409, "Content block does not belong to this attempt's content.");
+            throw new ConflictException(1409, "Khối nội dung không thuộc bài làm này.");
         }
         if (Boolean.FALSE.equals(request.isGradable())) {
-            throw new ConflictException(1409, "This block is not gradable.");
+            throw new ConflictException(1409, "Khối này không được chấm điểm.");
         }
 
         AttemptAnswer answer = attemptAnswerRepository
@@ -231,6 +234,10 @@ public class AttemptService {
         attemptRepository.save(attempt);
         result = saveResultIdempotently(attempt, result);
 
+        if (attempt.getStatus() == AttemptStatus.FINALIZED || attempt.getStatus() == AttemptStatus.PENDING_REVIEW) {
+            learningStreakClient.pingStreak(attempt.getUserId());
+        }
+
         return toResultResponse(result);
     }
 
@@ -238,7 +245,7 @@ public class AttemptService {
     public AttemptResultResponse getResult(UUID attemptId, UUID userId) {
         Attempt attempt = findOwnedAttempt(attemptId, userId);
         if (attempt.getResult() == null) {
-            throw new ConflictException(1409, "Attempt has not been submitted yet.");
+            throw new ConflictException(1409, "Bài làm chưa được nộp.");
         }
         return toResultResponse(attempt.getResult());
     }
@@ -247,7 +254,7 @@ public class AttemptService {
     public AttemptReviewResponse getReview(UUID attemptId, UUID userId) {
         Attempt attempt = findOwnedAttempt(attemptId, userId);
         if (attempt.getResult() == null) {
-            throw new ConflictException(1409, "Attempt has not been submitted yet.");
+            throw new ConflictException(1409, "Bài làm chưa được nộp.");
         }
         AssessmentResult result = attempt.getResult();
         List<AttemptReviewAnswerResponse> answers = attempt.getAnswers().stream()
@@ -284,6 +291,17 @@ public class AttemptService {
     }
 
     @Transactional(readOnly = true)
+    public LatestSubmittedAttemptResponse getLatestSubmittedAttempt(UUID contentId, UUID userId) {
+        Attempt attempt = attemptRepository
+                .findTopByContentIdAndUserIdAndSubmittedAtIsNotNullOrderBySubmittedAtDesc(contentId, userId)
+                .orElseThrow(() -> new NotFoundException(1404, "Không tìm thấy bài làm đã nộp cho nội dung này."));
+        AssessmentResult result = attempt.getResult();
+        Boolean passed = result != null ? result.getPassed() : null;
+        return new LatestSubmittedAttemptResponse(
+                attempt.getId(), attempt.getContentId(), attempt.getStatus(), attempt.getSubmittedAt(), passed);
+    }
+
+    @Transactional(readOnly = true)
     public List<AttemptSummaryResponse> getMyAttempts(UUID userId) {
         return attemptRepository.findAllByUserIdOrderByStartedAtDesc(userId).stream()
                 .map(this::toAttemptSummary)
@@ -299,7 +317,7 @@ public class AttemptService {
 
     public AttemptResultResponse refreshResultAfterManualReview(UUID attemptId) {
         Attempt attempt = attemptRepository.findByIdForUpdate(attemptId)
-                .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
+                .orElseThrow(() -> new NotFoundException(1404, "Không tìm thấy bài làm: " + attemptId));
 
         BigDecimal score = BigDecimal.ZERO;
         int correctAnswers = 0;
@@ -369,18 +387,18 @@ public class AttemptService {
 
     private Attempt findOwnedAttempt(UUID attemptId, UUID userId) {
         Attempt attempt = attemptRepository.findById(attemptId)
-                .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
+                .orElseThrow(() -> new NotFoundException(1404, "Không tìm thấy bài làm: " + attemptId));
         if (!attempt.getUserId().equals(userId)) {
-            throw new NotFoundException(1404, "Attempt not found for current user.");
+            throw new NotFoundException(1404, "Không tìm thấy bài làm của người dùng hiện tại.");
         }
         return attempt;
     }
 
     private Attempt findOwnedAttemptForUpdate(UUID attemptId, UUID userId) {
         Attempt attempt = attemptRepository.findByIdForUpdate(attemptId)
-                .orElseThrow(() -> new NotFoundException(1404, "Attempt not found: " + attemptId));
+                .orElseThrow(() -> new NotFoundException(1404, "Không tìm thấy bài làm: " + attemptId));
         if (!attempt.getUserId().equals(userId)) {
-            throw new NotFoundException(1404, "Attempt not found for current user.");
+            throw new NotFoundException(1404, "Không tìm thấy bài làm của người dùng hiện tại.");
         }
         return attempt;
     }
@@ -425,13 +443,13 @@ public class AttemptService {
 
     private void ensureInProgress(Attempt attempt) {
         if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
-            throw new ConflictException(1409, "Attempt is not in progress.");
+            throw new ConflictException(1409, "Bài làm không ở trạng thái đang làm.");
         }
     }
 
     private void ensureTimeRemaining(Attempt attempt) {
         if (attempt.getRemainingSeconds() != null && attempt.getRemainingSeconds() <= 0) {
-            throw new ConflictException(1409, "Time has expired for this attempt.");
+            throw new ConflictException(1409, "Đã hết thời gian cho bài làm này.");
         }
     }
 
@@ -439,6 +457,7 @@ public class AttemptService {
         long pendingManualReviews = result.getAttempt().getAnswers().stream()
                 .filter(answer -> answer.getGradingStatus() == GradingStatus.MANUAL_REVIEW)
                 .count();
+        AttemptResultDisplayHelper.DisplayFields display = AttemptResultDisplayHelper.resolve(result);
         return new AttemptResultResponse(
                 result.getAttempt().getId(),
                 result.getAttempt().getContentId(),
@@ -450,7 +469,11 @@ public class AttemptService {
                 result.getCompletedAt(),
                 result.getResultStatus(),
                 result.getAttempt().getStatus(),
-                (int) pendingManualReviews);
+                (int) pendingManualReviews,
+                display.scorePercent(),
+                display.displayOutcome(),
+                display.mascotKey(),
+                display.passThresholdScore());
     }
 
     private AttemptSummaryResponse toAttemptSummary(Attempt attempt) {

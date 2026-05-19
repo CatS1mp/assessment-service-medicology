@@ -34,7 +34,7 @@ public class ManualReviewService {
     public void finalizeReview(UUID attemptAnswerId, UUID reviewerId, ManualReviewFinalizeRequest request) {
         AttemptAnswer answer = attemptAnswerRepository
                 .findById(attemptAnswerId)
-                .orElseThrow(() -> new NotFoundException(1404, "Attempt answer not found: " + attemptAnswerId));
+                .orElseThrow(() -> new NotFoundException(1404, "Không tìm thấy câu trả lời: " + attemptAnswerId));
 
         boolean correct = Boolean.TRUE.equals(request.correct());
         BigDecimal awardedPoints = request.awardedPoints();

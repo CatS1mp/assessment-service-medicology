@@ -59,7 +59,7 @@ public class GlobalExceptionHandler {
                 .body(new ErrorResponse(
                         HttpStatus.FORBIDDEN.value(),
                         1403,
-                        "You do not have permission to access this resource.",
+                        "Bạn không có quyền truy cập tài nguyên này.",
                         request.getRequestURI(),
                         Instant.now()));
     }
@@ -114,7 +114,7 @@ public class GlobalExceptionHandler {
                 .body(new ErrorResponse(
                         HttpStatus.INTERNAL_SERVER_ERROR.value(),
                         1500,
-                        "Unexpected server error.",
+                        "Hệ thống gặp sự cố bất ngờ. Vui lòng thử lại sau.",
                         request.getRequestURI(),
                         Instant.now()));
     }

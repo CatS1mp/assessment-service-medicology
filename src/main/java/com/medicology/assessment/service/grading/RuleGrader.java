@@ -44,7 +44,7 @@ public class RuleGrader {
                 GradingStatus.FINALIZED,
                 GradingSource.RULE,
                 BigDecimal.ONE,
-                correct ? "Rule grader matched expected answer." : "Rule grader did not match expected answer.",
+                correct ? "Chấm theo quy tắc: khớp đáp án mong đợi." : "Chấm theo quy tắc: không khớp đáp án mong đợi.",
                 null,
                 Instant.now());
     }

@@ -59,7 +59,7 @@ public class AiShortAnswerGrader {
                     GradingStatus.FINALIZED,
                     GradingSource.AI,
                     confidence,
-                    "AI confidence is <= 0.70, auto-marked incorrect. " + aiResponse.explanation(),
+                    "Độ tin cậy AI ≤ 0,70, tự đánh sai. " + aiResponse.explanation(),
                     assessmentProperties.getAiModel(),
                     Instant.now());
         }
@@ -72,7 +72,7 @@ public class AiShortAnswerGrader {
                     confidenceThreshold,
                     aiResponse.explanation());
             return GradingDecision.manualReview(
-                    "AI confidence in manual-review band (0.70, " + confidenceThreshold + "). Review required.");
+                    "Độ tin cậy AI trong khoảng chấm thủ công (0,70, " + confidenceThreshold + "). Cần duyệt.");
         }
 
         boolean correct = aiResponse.correct();
@@ -96,7 +96,7 @@ public class AiShortAnswerGrader {
             return new AiEvaluationResponse(
                     false,
                     BigDecimal.ZERO,
-                    "AI API key is not configured.",
+                    "Chưa cấu hình khóa API AI.",
                     null);
         }
 
@@ -139,7 +139,7 @@ public class AiShortAnswerGrader {
                 return new AiEvaluationResponse(
                         false,
                         BigDecimal.ZERO,
-                        "AI provider returned non-success status: " + response.statusCode(),
+                        "Nhà cung cấp AI trả về lỗi: " + response.statusCode(),
                         null);
             }
 
@@ -153,13 +153,13 @@ public class AiShortAnswerGrader {
                     .asText("");
             if (aiJsonText.isBlank()) {
                 log.error("ai_grading_provider_empty_response blockId={}", snapshot.contentBlockId());
-                return new AiEvaluationResponse(false, BigDecimal.ZERO, "AI provider returned empty content.", null);
+                return new AiEvaluationResponse(false, BigDecimal.ZERO, "Nhà cung cấp AI trả về nội dung trống.", null);
             }
 
             JsonNode aiJson = objectMapper.readTree(aiJsonText);
             boolean correct = aiJson.path("correct").asBoolean(false);
             BigDecimal confidence = parseConfidence(aiJson.path("confidence"));
-            String explanation = aiJson.path("explanation").asText("AI explanation is unavailable.");
+            String explanation = aiJson.path("explanation").asText("Không có giải thích từ AI.");
             Integer awardedPoints = parseAwardedPoints(aiJson.path("awardedPoints"));
             List<String> suggestions = parseSuggestions(aiJson.path("suggestedCorrectAnswers"));
             String reason = aiJson.path("reason").asText("").trim();
@@ -167,11 +167,11 @@ public class AiShortAnswerGrader {
                 explanation = reason + ". " + explanation;
             }
             if (!correct && !suggestions.isEmpty()) {
-                explanation = explanation + " Suggested answers: " + String.join("; ", suggestions) + ".";
+                explanation = explanation + " Gợi ý đáp án: " + String.join("; ", suggestions) + ".";
             } else if (!correct) {
                 String fallback = extractExpectedReference(snapshot.payload());
                 if (!fallback.isBlank()) {
-                    explanation = explanation + " Suggested answers: " + fallback + ".";
+                    explanation = explanation + " Gợi ý đáp án: " + fallback + ".";
                 }
             }
             explanation = sanitizeExplanation(explanation);
@@ -186,7 +186,7 @@ public class AiShortAnswerGrader {
             return new AiEvaluationResponse(
                     false,
                     BigDecimal.ZERO,
-                    "AI evaluation failed: " + ex.getMessage(),
+                    "Chấm AI thất bại: " + ex.getMessage(),
                     null);
         }
     }
@@ -243,7 +243,7 @@ public class AiShortAnswerGrader {
         - if incorrect: explanation is mandatory and must clearly say what is missing/wrong
         - if incorrect: provide 2-3 concise suggestedCorrectAnswers (each <= 20 words)
         - if correct: suggestedCorrectAnswers must be []
-        - explanation must be concise, learner-friendly, and mention why correct/incorrect
+        - explanation and reason must be concise, learner-friendly, in Vietnamese with full diacritics (tiếng Việt có dấu)
         - gradingCriteria must contain 3-6 short bullet-like criteria used in grading
         - prioritize patient safety and clinical accuracy when judging equivalence
         - ignore grammar/spelling if medical meaning remains correct
@@ -337,7 +337,7 @@ public class AiShortAnswerGrader {
 
     private String sanitizeExplanation(String explanation) {
         if (explanation == null || explanation.isBlank()) {
-            return "AI did not provide a detailed explanation.";
+            return "AI không cung cấp giải thích chi tiết.";
         }
         return explanation.replaceAll("(?i)confidence\\s*[:=]?\\s*\\d+(?:\\.\\d+)?%?", "").trim();
     }

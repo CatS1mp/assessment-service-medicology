@@ -12,7 +12,7 @@ public final class SecurityUtils {
 
     public static UUID requireUserId(UserPrincipal principal) {
         if (principal == null || principal.getId() == null) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, 1401, "Token does not contain a valid user id.");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, 1401, "Token không chứa mã người dùng hợp lệ.");
         }
         return principal.getId();
     }
