@@ -28,6 +28,7 @@ import org.springframework.beans.factory.annotation.Value;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final InternalServiceAuthFilter internalServiceAuthFilter;
     private final ObjectMapper objectMapper;
 
     @Value("${app.cors.allowed-origins:http://localhost:3000,http://localhost:8083}")
@@ -45,7 +46,8 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/api-docs/**",
-                                "/actuator/health")
+                                "/actuator/health",
+                                "/api/v1/assessment/internal/**")
                         .permitAll()
                         .anyRequest()
                         .authenticated())
@@ -57,6 +59,7 @@ public class SecurityConfig {
                                 writeSecurityError(response, request.getRequestURI(), 403, 1403,
                                         "You do not have permission to access this resource.")))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
